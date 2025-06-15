@@ -7,7 +7,7 @@ export function WebCamSelect() {
   // TODO remove roomContext, this is only needed because of a bug in `useMediaDeviceSelect`
   const roomContext = useRoomContext();
   const { devices, activeDeviceId, setActiveMediaDevice } =
-    useMediaDeviceSelect({ kind: "videoinput", room: roomContext });
+    useMediaDeviceSelect({ kind: "videoinput", room: roomContext  });
 
   return (
     <div className="px-2">

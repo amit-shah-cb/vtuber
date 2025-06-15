@@ -1,13 +1,8 @@
-import { VRM, VRMLoaderPlugin } from "@pixiv/three-vrm";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
-import { useMediaDeviceSelect } from "@livekit/components-react";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { createLocalVideoTrack } from "livekit-client";
-import { Holistic } from "@mediapipe/holistic";
 import useResizeObserver from "use-resize-observer";
-import { Vector3 } from "three";
-import { animateVRM } from "./rigging";
 
 type Props = {
   onCanvasStreamChanged: (canvasStream: MediaStream | null) => void;
@@ -18,97 +13,85 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
-  const clockRef = useRef(new THREE.Clock());
-  const vrmRef = useRef<VRM | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const canvasStreamRef = useRef<MediaStream | null>(null);
-  const loader = useRef(new GLTFLoader());
-  const holistic = useRef(
-    new Holistic({
-      locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629/${file}`;
-      },
-    })
-  );
+  const videoTextureRef = useRef<THREE.VideoTexture | null>(null);
+  const planeRef = useRef<THREE.Mesh | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
   const size = useResizeObserver({ ref: resizeRef });
-
-  const inferenceLoop = useRef(async () => {
-    try {
-      await holistic.current.send({ image: videoRef.current! });
-    } catch (e) {
-      console.error("Error in holistic:", e);
-      // Reset holistic
-      holistic.current = new Holistic({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629/${file}`;
-        },
-      });
-      setupHolistic.current();
-    }
-    setTimeout(inferenceLoop.current, 1000 / 30);
-  });
 
   const animate = useRef(() => {
     requestAnimationFrame(animate.current);
-    if (vrmRef.current) {
-      vrmRef.current.update(clockRef.current.getDelta());
+    // Update video texture if available
+    if (videoTextureRef.current) {
+      videoTextureRef.current.needsUpdate = true;
+    }
+    // Update orbit controls
+    if (controlsRef.current) {
+      controlsRef.current.update();
     }
     rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
   });
 
   const setupThreeJS = useCallback(() => {
-    if (!canvasRef.current) return; // Shouldn't ever happen
+    if (!canvasRef.current) return;
     if (sceneRef.current) return; // Already setup
     if (!size.width || !size.height) return;
 
-    loader.current.register((parser) => {
-      return new VRMLoaderPlugin(parser);
-    });
-
+    // Create scene
     sceneRef.current = new THREE.Scene();
+    
+    // Create renderer
     rendererRef.current = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
     });
+    
+    // Create camera
     cameraRef.current = new THREE.PerspectiveCamera(
       45,
       size.width / size.height,
       0.1,
       1000
     );
-    cameraRef.current.position.z = 1;
-    cameraRef.current.position.y = 1;
-    cameraRef.current.rotation.set(0.0, 0, 0.0);
-    const light = new THREE.AmbientLight(0xffffff); // soft white light
+    cameraRef.current.position.z = 2;
+
+    // Create orbit controls
+    controlsRef.current = new OrbitControls(cameraRef.current, canvasRef.current);
+    controlsRef.current.enableDamping = true;
+    controlsRef.current.dampingFactor = 0.05;
+    controlsRef.current.enableZoom = true;
+    controlsRef.current.enableRotate = true;
+    controlsRef.current.enablePan = true;
+
+    // Add ambient light
+    const light = new THREE.AmbientLight(0xffffff, 1);
     sceneRef.current.add(light);
 
-    loader.current.load("/characters/model.vrm", (gltf) => {
-      const vrm = gltf.userData.vrm as VRM;
-      vrmRef.current = vrm;
-      sceneRef.current?.add(vrm.scene);
-      const target: Vector3 = new THREE.Vector3(0, 0, 0);
-      vrm.humanoid.humanBones.head.node.getWorldPosition(target);
-      cameraRef.current!.position.y = target.y;
-      var bgTexture = new THREE.TextureLoader().load("bg.jpeg");
-      var material = new THREE.SpriteMaterial({
-        map: bgTexture,
-        color: 0xffffff,
+    // Create video texture and plane when video is ready
+    if (videoRef.current) {
+      videoTextureRef.current = new THREE.VideoTexture(videoRef.current);
+      videoTextureRef.current.minFilter = THREE.LinearFilter;
+      videoTextureRef.current.magFilter = THREE.LinearFilter;
+
+      // Create plane geometry to display video
+      const geometry = new THREE.PlaneGeometry(2, 1.5);
+      const material = new THREE.MeshBasicMaterial({
+        map: videoTextureRef.current,
       });
-      var sprite = new THREE.Sprite(material);
-      sprite.scale.set(10, 7, 7);
-      sprite.position.set(0, 1, -5);
-      sceneRef.current?.add(sprite);
-    });
+      
+      planeRef.current = new THREE.Mesh(geometry, material);
+      sceneRef.current.add(planeRef.current);
+    }
   }, [size.height, size.width]);
 
   useEffect(() => {
     createLocalVideoTrack({
-      facingMode: "environment",
-      resolution: { width: 640, height: 320, frameRate: 15 },
+      facingMode: "user",
+      resolution: { width: 1080, height: 1920, frameRate: 30 },
     }).then((t) => {
       t.attach(videoRef.current!);
-      setupHolistic.current();
-      inferenceLoop.current();
+      // Start animation loop after video is attached
       animate.current();
     });
   }, []);
@@ -117,7 +100,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (!canvasRef.current) return;
     if (!cameraRef.current) return;
     if (!size.width || !size.height) return;
-    canvasRef.current.width = size.width + 1; // prevent pixel line on right
+    
+    canvasRef.current.width = size.width + 1;
     canvasRef.current.height = size.height;
     rendererRef.current?.setSize(size.width, size.height);
     cameraRef.current.aspect = size.width / size.height;
@@ -131,16 +115,6 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     onCanvasStreamChanged(canvasStreamRef.current);
   }, [onCanvasStreamChanged]);
 
-  const setupHolistic = useRef(() => {
-    holistic.current.setOptions({
-      refineFaceLandmarks: true,
-    });
-    holistic.current.onResults((results) => {
-      if (!vrmRef.current) return;
-      animateVRM(vrmRef.current, results, videoRef.current);
-    });
-  });
-
   useEffect(setupThreeJS, [setupThreeJS]);
 
   return (
@@ -153,7 +127,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
           ref={canvasRef}
         />
       </div>
-      <div className="absolute w-[100px] h-[100px] bottom-2 right-2 overflow-hidden">
+      <div className="absolute w-[0px] h-[0px] bottom-2 right-2 overflow-hidden">
         <video className="h-full w-full" ref={videoRef} />
       </div>
     </div>

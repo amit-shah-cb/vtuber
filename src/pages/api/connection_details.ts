@@ -24,6 +24,10 @@ export default async function handler(
   const apiSecret = process.env.LIVEKIT_API_SECRET;
   const wsUrl = process.env.LIVEKIT_WS_URL;
 
+  console.log("apiKey", apiKey);
+  console.log("apiSecret", apiSecret);
+  console.log("wsUrl", wsUrl);
+
   if (!apiKey || !apiSecret || !wsUrl) {
     return res.status(500).json({ error: "Server misconfigured" });
   }
