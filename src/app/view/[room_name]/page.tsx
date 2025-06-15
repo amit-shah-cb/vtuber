@@ -71,6 +71,7 @@ const Video = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoTrack = useMediaTrack(Track.Source.Camera);
   const audioTrack = useMediaTrack(Track.Source.Microphone);
+  const [isMuted, setIsMuted] = useState(true);
 
   useEffect(() => {
     const refCurrent = videoRef.current;
@@ -92,9 +93,24 @@ const Video = () => {
     };
   }, [audioTrack, videoTrack]);
 
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+      setIsMuted(!isMuted);
+    }
+  };
+
   return (
-    <video 
-      ref={videoRef}      
-    />
+    <div className="relative w-full h-full">
+      <video 
+        ref={videoRef}       
+      />
+      <button
+        onClick={toggleMute}
+        className="absolute top-4 right-4 bg-black bg-opacity-50 text-white px-4 py-2 rounded hover:bg-opacity-70 transition-opacity"
+      >
+        {isMuted ? "🔇 Unmute" : "🔊 Mute"}
+      </button>
+    </div>
   );
 };
