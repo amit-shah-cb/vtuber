@@ -314,37 +314,24 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     // Create scene
     sceneRef.current = new THREE.Scene();
     
-    // Create renderer with higher pixel ratio for better quality
+    // Create renderer
     rendererRef.current = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
-      antialias: true,
-      alpha: false,
-      powerPreference: "high-performance"
     });
     
-    // Set pixel ratio for crisp rendering
-    rendererRef.current.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    
-    // Calculate iPhone 15 aspect ratio
-    const videoAspectRatio = 1170 / 2532; // ~0.462
-    
-    // Create orthographic camera positioned head-on to the video texture
-    // Use video aspect ratio to prevent stretching
-    const frustumHeight = 1.0; // Controls zoom level
-    const frustumWidth = frustumHeight * videoAspectRatio; // Maintain video aspect ratio
+    // Create orthographic camera
+    const aspect = size.width / size.height;
+    const frustumSize = 2; // Controls the zoom level
     
     cameraRef.current = new THREE.OrthographicCamera(
-      -frustumWidth / 2,   // left
-      frustumWidth / 2,    // right
-      frustumHeight / 2,   // top
-      -frustumHeight / 2,  // bottom
-      0.1,                 // near
-      1000                 // far
+      (-frustumSize * aspect) / 2,  // left
+      (frustumSize * aspect) / 2,   // right
+      frustumSize / 2,              // top
+      -frustumSize / 2,             // bottom
+      0.1,                          // near
+      1000                          // far
     );
-    
-    // Position camera head-on to the video texture (straight down Z-axis)
-    cameraRef.current.position.set(0, 0, 2);
-    cameraRef.current.lookAt(0, 0, 0);
+    cameraRef.current.position.z = 5;
 
     // Create orbit controls
     controlsRef.current = new OrbitControls(cameraRef.current, canvasRef.current);
@@ -363,13 +350,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       videoTextureRef.current = new THREE.VideoTexture(videoRef.current);
       videoTextureRef.current.flipY = true;
       videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
-      
-      // Use higher quality filtering for better resolution
       videoTextureRef.current.minFilter = THREE.LinearFilter;
       videoTextureRef.current.magFilter = THREE.LinearFilter;
-      videoTextureRef.current.generateMipmaps = false; // Disable mipmaps for video textures
-      videoTextureRef.current.wrapS = THREE.ClampToEdgeWrapping;
-      videoTextureRef.current.wrapT = THREE.ClampToEdgeWrapping;
 
       // Create lip deformation shader material
       lipShaderRef.current = new THREE.ShaderMaterial({
@@ -384,23 +366,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         fragmentShader: lipDeformationFragmentShader
       });
 
-      // Create plane geometry that exactly matches the video aspect ratio
-      // This prevents any stretching by matching the orthographic frustum
-      const planeWidth = frustumWidth;   // Match orthographic frustum width exactly
-      const planeHeight = frustumHeight; // Match orthographic frustum height exactly
-      
-      const geometry = new THREE.PlaneGeometry(
-        planeWidth, 
-        planeHeight, 
-        512, // High subdivision for smooth deformation
-        Math.floor(512 / videoAspectRatio) // Proportional subdivision based on aspect ratio
-      );
+      // Create plane geometry with high subdivision for smooth deformation
+      const geometry = new THREE.PlaneGeometry(2, 1.5, 128, 96);
       
       planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current);
-      
-      // Position plane to fill the orthographic view exactly
-      planeRef.current.position.set(0, 0, 0);
-      
       sceneRef.current.add(planeRef.current);
     }
   }, [size.height, size.width]);
@@ -468,10 +437,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     createLocalVideoTrack({
       facingMode: "user",
       resolution: { 
-        width: 1170,   // iPhone 15 vertical resolution width
-        height: 2532,  // iPhone 15 vertical resolution height 
+        width: 1080, 
+        height: 1920, 
         frameRate: 30 
-      }
+      },
     }).then((t) => {
       t.attach(videoRef.current!);
       // Start animation loop after video is attached
@@ -489,58 +458,24 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (!cameraRef.current) return;
     if (!size.width || !size.height) return;
     
-    // Calculate iPhone 15 aspect ratio (9:19.5 approximately)
-    const videoAspectRatio = 1170 / 2532; // ~0.462
-    const containerAspectRatio = size.width / size.height;
+    canvasRef.current.width = size.width + 1;
+    canvasRef.current.height = size.height;
+    rendererRef.current?.setSize(size.width, size.height);
     
-    let canvasWidth, canvasHeight;
+    // Update orthographic camera frustum
+    const aspect = size.width / size.height;
+    const frustumSize = 2; // Keep consistent with initial setup
     
-    // Determine if we're on mobile (screen width < 768px)
-    const isMobile = window.innerWidth < 768;
-    
-    if (isMobile) {
-      // On mobile: Use full screen iPhone 15 dimensions, centered
-      canvasWidth = Math.min(size.width, window.innerWidth);
-      canvasHeight = canvasWidth / videoAspectRatio;
-      
-      // If height exceeds container, scale down
-      if (canvasHeight > size.height) {
-        canvasHeight = size.height;
-        canvasWidth = canvasHeight * videoAspectRatio;
-      }
-    } else {
-      // On desktop: Maintain video aspect ratio but fit within container
-      if (containerAspectRatio > videoAspectRatio) {
-        // Container is wider than video aspect ratio
-        canvasHeight = size.height;
-        canvasWidth = canvasHeight * videoAspectRatio;
-      } else {
-        // Container is taller than video aspect ratio
-        canvasWidth = size.width;
-        canvasHeight = canvasWidth / videoAspectRatio;
-      }
-    }
-    
-    canvasRef.current.width = canvasWidth;
-    canvasRef.current.height = canvasHeight;
-    rendererRef.current?.setSize(canvasWidth, canvasHeight);
-    
-    // Update orthographic camera frustum - maintain video aspect ratio to prevent stretching
-    const frustumHeight = 1.0; // Match the setup value
-    const frustumWidth = frustumHeight * videoAspectRatio; // Always use video aspect ratio
-    
-    cameraRef.current.left = -frustumWidth / 2;
-    cameraRef.current.right = frustumWidth / 2;
-    cameraRef.current.top = frustumHeight / 2;
-    cameraRef.current.bottom = -frustumHeight / 2;
+    cameraRef.current.left = (-frustumSize * aspect) / 2;
+    cameraRef.current.right = (frustumSize * aspect) / 2;
+    cameraRef.current.top = frustumSize / 2;
+    cameraRef.current.bottom = -frustumSize / 2;
     cameraRef.current.updateProjectionMatrix();
   }, [size, size.height, size.width]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
     if (canvasStreamRef.current) return;
-    
-    // Capture stream at higher frame rate for better quality
     canvasStreamRef.current = canvasRef.current.captureStream(60);
     onCanvasStreamChanged(canvasStreamRef.current);
   }, [onCanvasStreamChanged]);
@@ -548,17 +483,12 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   useEffect(setupThreeJS, [setupThreeJS]);
 
   return (
-    <div className="relative h-full w-full flex items-center justify-center bg-black">
-      <div className="relative" ref={resizeRef} style={{ width: '100%', height: '100%', maxWidth: '100vw', maxHeight: '100vh' }}>
+    <div className="relative h-full w-full">
+      <div className="overflow-hidden h-full" ref={resizeRef}>
         <canvas
-          className="block mx-auto"
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain',
-            maxWidth: '100vw',
-            maxHeight: '100vh'
-          }}
+          width={size.width}
+          height={size.height}
+          className="h-full w-full"
           ref={canvasRef}
         />
       </div>
@@ -567,9 +497,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       </div>
       
       {/* Control Panel */}
-      <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-4 rounded max-w-xs z-10">
+      <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-4 rounded max-w-xs">
         <h3 className="text-sm font-bold mb-2">Lip Deformation Controls</h3>
-        <p className="text-xs text-gray-300 mb-3">iPhone 15 Resolution • 1170×2532</p>
         
         {/* Intensity Controls */}
         <div className="space-y-2 text-xs mb-4">
