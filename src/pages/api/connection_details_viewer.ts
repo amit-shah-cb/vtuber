@@ -27,12 +27,13 @@ export default async function handler(
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
   const wsUrl = process.env.LIVEKIT_WS_URL;
+  const uuid = process.env.LIVEKIT_UUID ?? v4();
 
   if (!apiKey || !apiSecret || !wsUrl) {
     return res.status(500).json({ error: "Server misconfigured" });
   }
 
-  const at = new AccessToken(apiKey, apiSecret, { identity: "viewer-" + v4() });
+  const at = new AccessToken(apiKey, apiSecret, { identity: "viewer-" + uuid });
 
   at.addGrant({
     room: req.body.room,

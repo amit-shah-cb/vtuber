@@ -23,6 +23,7 @@ export default async function handler(
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
   const wsUrl = process.env.LIVEKIT_WS_URL;
+  const uuid = process.env.LIVEKIT_UUID ?? v4();
 
   console.log("apiKey", apiKey);
   console.log("apiSecret", apiSecret);
@@ -35,7 +36,7 @@ export default async function handler(
   const at = new AccessToken(apiKey, apiSecret, { identity: "streamer" });
 
   at.addGrant({
-    room: v4(),
+    room: uuid,
     roomJoin: true,
     canPublish: true,
     canSubscribe: true,

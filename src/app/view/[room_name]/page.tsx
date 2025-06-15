@@ -75,9 +75,11 @@ const Video = () => {
   useEffect(() => {
     const refCurrent = videoRef.current;
     if (videoTrack) {
+      console.log("attaching video track");
       videoTrack.track?.attach(videoRef.current!);
     }
     if (audioTrack) {
+      console.log("attaching audio track");
       audioTrack.track?.attach(videoRef.current!);
     }
     return () => {
@@ -92,11 +94,7 @@ const Video = () => {
 
   return (
     <video 
-      ref={videoRef} 
-      autoPlay 
-      controls 
-      playsInline
-      style={{ width: '100%', height: '100%' }}
+      ref={videoRef}      
     />
   );
 };
