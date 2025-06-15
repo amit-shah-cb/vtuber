@@ -71,6 +71,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     // Create video texture and plane when video is ready
     if (videoRef.current) {
       videoTextureRef.current = new THREE.VideoTexture(videoRef.current);
+      videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
       videoTextureRef.current.minFilter = THREE.LinearFilter;
       videoTextureRef.current.magFilter = THREE.LinearFilter;
 
