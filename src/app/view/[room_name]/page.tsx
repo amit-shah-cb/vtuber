@@ -90,5 +90,13 @@ const Video = () => {
     };
   }, [audioTrack, videoTrack]);
 
-  return <video ref={videoRef} />;
+  return (
+    <video 
+      ref={videoRef} 
+      autoPlay 
+      controls 
+      playsInline
+      style={{ width: '100%', height: '100%' }}
+    />
+  );
 };
