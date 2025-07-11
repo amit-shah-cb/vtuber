@@ -4,67 +4,10 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { createLocalVideoTrack } from "livekit-client";
 import useResizeObserver from "use-resize-observer";
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
-import { 
-  FACEMESH_LEFT_EYE, 
-  FACEMESH_RIGHT_EYE, 
-  FACEMESH_LIPS, 
-  FACEMESH_LEFT_EYEBROW, 
-  FACEMESH_RIGHT_EYEBROW, 
-  FACEMESH_FACE_OVAL 
-} from "@mediapipe/face_mesh";
 
 type Props = {
   onCanvasStreamChanged: (canvasStream: MediaStream | null) => void;
 };
-
-// Lip Deformation Shader
-const lipDeformationVertexShader = `
-  varying vec2 vUv;
-  uniform vec2 lipCenter;
-  uniform vec2 anchorOffset;
-  uniform float deformationIntensity;
-  uniform float deformationRadius;
-  
-  void main() {
-    vUv = uv;
-    vec3 pos = position;
-    
-    // Apply anchor point displacement to lip center
-    vec2 adjustedLipCenter = lipCenter + anchorOffset;
-    
-    // Calculate distance from current vertex to adjusted lip center
-    float distanceToLip = distance(uv, adjustedLipCenter);
-    
-    // Apply radial deformation under the lips
-    if (distanceToLip < deformationRadius) {
-      // Calculate falloff factor (stronger at center, weaker at edges)
-      float factor = (deformationRadius - distanceToLip) / deformationRadius;
-      factor = smoothstep(0.0, 1.0, factor); // Smooth falloff
-      
-      // Calculate direction from adjusted lip center to current point
-      vec2 direction = normalize(uv - adjustedLipCenter);
-      
-      // Apply deformation - FIXED: Inverted Y direction
-      // Positive values create smile (upward), negative create grimace (downward)
-      pos.y -= factor * deformationIntensity * 0.1; // Flipped sign for correct direction
-      
-      // Add slight horizontal spread for more natural look
-      pos.x += direction.x * factor * deformationIntensity * 0.03;
-    }
-    
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-  }
-`;
-
-const lipDeformationFragmentShader = `
-  uniform sampler2D videoTexture;
-  varying vec2 vUv;
-  
-  void main() {
-    vec4 videoColor = texture2D(videoTexture, vUv);
-    gl_FragColor = videoColor;
-  }
-`;
 
 export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -78,46 +21,57 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const planeRef = useRef<THREE.Mesh | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
-  const faceMeshRef = useRef<THREE.LineSegments | null>(null);
-  const faceGeometryRef = useRef<THREE.BufferGeometry | null>(null);
-  const faceMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
-  const lipShaderRef = useRef<THREE.ShaderMaterial | null>(null);
   const faceBoundingBoxRef = useRef<THREE.LineSegments | null>(null);
   const faceNormalVectorRef = useRef<THREE.ArrowHelper | null>(null);
   const [showFaceBoundingBox, setShowFaceBoundingBox] = useState(false);
+  const [videoAspectRatio, setVideoAspectRatio] = useState<number>(9/16);
   const size = useResizeObserver({ ref: resizeRef });
 
-  // Official MediaPipe face mesh indices for specific facial features
-  const faceIndices = useRef<number[]>([]);
-
-  // Deformation controls
-  const deformationIntensity = useRef(0.0); // Start with filters OFF - Positive = smile, Negative = grimace
-  const deformationRadius = useRef(0.15); // Size of affected area
-  const anchorOffsetX = useRef(0.0); // Horizontal anchor displacement
-  const anchorOffsetY = useRef(0.02); // Vertical anchor displacement (default slightly below lip)
-
-  // Initialize face indices with official MediaPipe facial feature data
-  useEffect(() => {
-    const indices: number[] = [];
+  const updateVideoPlaneSize = useCallback(() => {
+    if (!videoRef.current || !planeRef.current || !cameraRef.current) return;
     
-    // Combine all facial feature edges into one array
-    const allFacialFeatures = [
-      ...FACEMESH_FACE_OVAL,      // Face outline
-      ...FACEMESH_LEFT_EYE,       // Left eye
-      ...FACEMESH_RIGHT_EYE,      // Right eye  
-      ...FACEMESH_LIPS,           // Mouth/lips
-      ...FACEMESH_LEFT_EYEBROW,   // Left eyebrow
-      ...FACEMESH_RIGHT_EYEBROW   // Right eyebrow
-    ];
+    const video = videoRef.current;
+    if (video.videoWidth === 0 || video.videoHeight === 0) return;
     
-    allFacialFeatures.forEach((edge) => {
-      // Each edge is a pair of vertex indices [from, to]
-      indices.push(edge[0], edge[1]);
-    });
+    // 1. Get the aspect ratio of the webcam being captured
+    const actualAspectRatio = video.videoWidth / video.videoHeight;
+    setVideoAspectRatio(actualAspectRatio);
     
-    faceIndices.current = indices;
-    console.log(`Loaded ${allFacialFeatures.length} edges from official MediaPipe facial features`);
-    console.log(`Face oval: ${FACEMESH_FACE_OVAL.length}, Eyes: ${FACEMESH_LEFT_EYE.length + FACEMESH_RIGHT_EYE.length}, Lips: ${FACEMESH_LIPS.length}, Eyebrows: ${FACEMESH_LEFT_EYEBROW.length + FACEMESH_RIGHT_EYEBROW.length}`);
+    console.log(`Video dimensions: ${video.videoWidth}x${video.videoHeight}, aspect ratio: ${actualAspectRatio}`);
+    
+    // 2. Create a video texture plane that matches the aspect ratio of the capture video
+    const planeWidth = 2; // Fixed width
+    const planeHeight = planeWidth / actualAspectRatio; // Height calculated from video aspect ratio
+    
+    // Create new geometry with correct aspect ratio
+    const newGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight, 128, 192);
+    planeRef.current.geometry.dispose(); // Clean up old geometry
+    planeRef.current.geometry = newGeometry;
+    
+    // 3. Maintain a 9:16 frustum for the threejs camera (fixed dimensions)
+    const cameraAspectRatio = 9 / 16; // Fixed 9:16 aspect ratio for camera
+    const frustumWidth = 2; // Fixed frustum width
+    const frustumHeight = frustumWidth / cameraAspectRatio; // Fixed frustum height for 9:16
+    
+    cameraRef.current.left = -frustumWidth / 2;
+    cameraRef.current.right = frustumWidth / 2;
+    cameraRef.current.top = frustumHeight / 2;
+    cameraRef.current.bottom = -frustumHeight / 2;
+    cameraRef.current.updateProjectionMatrix();
+    
+    // 4. Adjust the positioning of the camera to fit the width of the video plane
+    // Calculate the scale factor to fit the video plane width within the camera frustum
+    const scaleFactor = frustumWidth / planeWidth;
+    
+    // Adjust camera position Z to achieve the desired scale
+    // Moving camera closer (smaller Z) makes objects appear larger
+    // Moving camera farther (larger Z) makes objects appear smaller
+    const baseDistance = 5; // Base camera distance
+    const adjustedDistance = baseDistance / scaleFactor;
+    
+    cameraRef.current.position.set(0, 0, adjustedDistance);
+    
+    console.log(`Updated plane size: ${planeWidth}x${planeHeight}, camera frustum: ${frustumWidth}x${frustumHeight} (9:16), camera distance: ${adjustedDistance}`);
   }, []);
 
   const animate = useRef(() => {
@@ -133,108 +87,12 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
   });
 
-  const initializeFaceMesh = useCallback(() => {
-    if (faceGeometryRef.current && faceMaterialRef.current) return; // Already initialized
-
-    // Create geometry once
-    faceGeometryRef.current = new THREE.BufferGeometry();
-    
-    // Create line material for wireframe edges
-    faceMaterialRef.current = new THREE.LineBasicMaterial({
-      color: 0x00ff00,
-      transparent: true,
-      opacity: 0.8,
-      linewidth: 2
-    });
-
-    // Set indices once (they don't change)
-    faceGeometryRef.current.setIndex(faceIndices.current);
-    
-    // Create initial empty attributes (will be updated later)
-    const initialVertices = new Float32Array(468 * 3); // 468 landmarks * 3 coordinates
-    
-    faceGeometryRef.current.setAttribute('position', new THREE.BufferAttribute(initialVertices, 3));
-  }, []);
-
-  const updateFaceMesh = useCallback((landmarks: any[]) => {
-    if (!faceGeometryRef.current || !faceMaterialRef.current || !landmarks || landmarks.length === 0) return;
-    
-    const vertices = faceGeometryRef.current.attributes.position.array as Float32Array;
-    
-    landmarks.forEach((landmark, index) => {
-      // Convert normalized coordinates to world space
-      // Since mesh is rotated 180° around Y-axis, flip X coordinate to match movement direction
-      const x = (0.5 - landmark.x) * 2;        // Flip X back to match video movement direction
-      const y = (0.5 - landmark.y) * 1.5;      // Flip Y to match video texture and scale
-      const z = landmark.z * 0.5 || 0;         // Scale Z depth
-      
-      vertices[index * 3] = x;
-      vertices[index * 3 + 1] = y;
-      vertices[index * 3 + 2] = z;
-    });
-    
-    // Mark attributes as needing update
-    faceGeometryRef.current.attributes.position.needsUpdate = true;
-  }, []);
-
-  const createOrUpdateFaceMesh = useCallback((faceLandmarks: any[]) => {
-    if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) return;
-    
-    // Initialize geometry and material if not done already
-    initializeFaceMesh();
-    
-    // Update the mesh with new landmark data
-    updateFaceMesh(faceLandmarks[0]);
-    
-    // Create line segments if it doesn't exist, otherwise just update existing one
-    if (!faceMeshRef.current) {
-      faceMeshRef.current = new THREE.LineSegments(faceGeometryRef.current!, faceMaterialRef.current!);
-      faceMeshRef.current.position.z = 0.02; // Slightly in front of video plane
-      
-      // Rotate 180 degrees around Y-axis so face mesh faces same direction as face in video
-      faceMeshRef.current.rotation.y = Math.PI; // 180 degrees rotation
-      
-      sceneRef.current.add(faceMeshRef.current);
-    } else {
-      // Optional: Add continuous rotation animation
-      // Uncomment the line below for animated rotation
-      // faceMeshRef.current.rotation.y += 0.01;
-    }
-  }, [initializeFaceMesh, updateFaceMesh]);
-
-  const removeFaceMesh = useCallback(() => {
-    if (faceMeshRef.current && sceneRef.current) {
-      sceneRef.current.remove(faceMeshRef.current);
-      faceMeshRef.current = null;
-    }
-  }, []);
-
-  const updateLipDeformation = useCallback((faceLandmarks: any[]) => {
-    if (!lipShaderRef.current || !faceLandmarks || faceLandmarks.length === 0) return;
-    
-    const landmarks = faceLandmarks[0];
-    
-    // Use lip center landmark (MediaPipe landmark 13 is mouth center)
-    const lipCenter = landmarks[13];
-    
-    // Convert landmark to UV coordinates - FIXED: Coordinate mapping
-    // MediaPipe coordinates are normalized [0,1] where (0,0) is top-left
-    // UV coordinates are [0,1] where (0,0) is bottom-left
-    const lipUV = new THREE.Vector2(lipCenter.x, 1.0 - lipCenter.y);
-    
-    // Update shader uniforms
-    lipShaderRef.current.uniforms.lipCenter.value = lipUV;
-    lipShaderRef.current.uniforms.anchorOffset.value = new THREE.Vector2(anchorOffsetX.current, anchorOffsetY.current);
-    lipShaderRef.current.uniforms.deformationIntensity.value = deformationIntensity.current;
-    lipShaderRef.current.uniforms.deformationRadius.value = deformationRadius.current;
-  }, []);
-
   const setupFaceLandmarker = useCallback(async () => {
     // Ensure we're running on client side
     if (typeof window === 'undefined') return;
     
     try {
-      console.log("Initializing FaceLandmarker for lip deformation...");
+      console.log("Initializing FaceLandmarker for face detection...");
       
       const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
@@ -285,7 +143,6 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
             const results = faceLandmarkerRef.current.detectForVideo(videoRef.current, startTimeMs);
             
             if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-              updateLipDeformation(results.faceLandmarks);
               createOrUpdateFaceBoundingBox(results.faceLandmarks);
             }
            
@@ -309,34 +166,56 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         setupFaceLandmarker();
       }, 2000);
     }
-  }, [updateLipDeformation]);
+  }, []);
 
   const setupThreeJS = useCallback(() => {
     if (!canvasRef.current) return;
     if (sceneRef.current) return; // Already setup
     if (!size.width || !size.height) return;
 
+    // Calculate canvas dimensions based on 9:16 camera frustum (not video aspect ratio)
+    const cameraAspectRatio = 9 / 16; // Fixed 9:16 aspect ratio for camera
+    const canvasHeight = size.height;
+    const canvasWidth = canvasHeight * cameraAspectRatio; // Use camera aspect ratio for canvas
+
     // Create scene
     sceneRef.current = new THREE.Scene();
     
-    // Create renderer
+    // Create renderer with better quality settings
     rendererRef.current = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
+      antialias: true,
+      alpha: false,
+      premultipliedAlpha: false,
     });
+    rendererRef.current.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    rendererRef.current.setSize(canvasWidth, canvasHeight, false);
     
-    // Create orthographic camera
-    const aspect = size.width / size.height;
-    const frustumSize = 2; // Controls the zoom level
+    // Create orthographic camera with fixed 9:16 frustum
+    // 2. Create a video texture plane that matches the aspect ratio of the capture video
+    const planeWidth = 2; // Fixed width
+    const planeHeight = planeWidth / videoAspectRatio; // Height calculated from video aspect ratio
+    
+    // 3. Maintain a 9:16 frustum for the threejs camera (fixed dimensions)
+    const frustumWidth = 2; // Fixed frustum width
+    const frustumHeight = frustumWidth / cameraAspectRatio; // Fixed frustum height for 9:16
     
     cameraRef.current = new THREE.OrthographicCamera(
-      (-frustumSize * aspect) / 2,  // left
-      (frustumSize * aspect) / 2,   // right
-      frustumSize / 2,              // top
-      -frustumSize / 2,             // bottom
-      0.1,                          // near
-      1000                          // far
+      -frustumWidth / 2,   // left
+      frustumWidth / 2,    // right
+      frustumHeight / 2,   // top
+      -frustumHeight / 2,  // bottom
+      0.1,                 // near
+      1000                 // far
     );
-    cameraRef.current.position.z = 5;
+    
+    // 4. Adjust the positioning of the camera to fit the width of the video plane
+    // Calculate the scale factor to fit the video plane width within the camera frustum
+    const scaleFactor = frustumWidth / planeWidth;
+    const baseDistance = 5; // Base camera distance
+    const adjustedDistance = baseDistance / scaleFactor;
+    
+    cameraRef.current.position.set(0, 0, adjustedDistance);
 
     // Create orbit controls
     controlsRef.current = new OrbitControls(cameraRef.current, canvasRef.current);
@@ -357,63 +236,37 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
       videoTextureRef.current.minFilter = THREE.LinearFilter;
       videoTextureRef.current.magFilter = THREE.LinearFilter;
+      videoTextureRef.current.format = THREE.RGBAFormat;
+      videoTextureRef.current.generateMipmaps = false;
 
-      // Create lip deformation shader material
-      lipShaderRef.current = new THREE.ShaderMaterial({
-        uniforms: {
-          videoTexture: { value: videoTextureRef.current },
-          lipCenter: { value: new THREE.Vector2(0.5, 0.7) }, // Default position
-          anchorOffset: { value: new THREE.Vector2(anchorOffsetX.current, anchorOffsetY.current) },
-          deformationIntensity: { value: deformationIntensity.current },
-          deformationRadius: { value: deformationRadius.current }
-        },
-        vertexShader: lipDeformationVertexShader,
-        fragmentShader: lipDeformationFragmentShader
+      // Create basic material for video display
+      const videoMaterial = new THREE.MeshBasicMaterial({
+        map: videoTextureRef.current
       });
 
-      // Create plane geometry with high subdivision for smooth deformation
-      const geometry = new THREE.PlaneGeometry(2, 1.5, 128, 96);
+      // Create plane geometry with dynamic aspect ratio
+      const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight, 128, 192);
       
-      planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current);
+      planeRef.current = new THREE.Mesh(geometry, videoMaterial);
       sceneRef.current.add(planeRef.current);
-    }
-  }, [size.height, size.width]);
 
-  // Control functions for deformation
-  const setSmileIntensity = useCallback((intensity: number) => {
-    deformationIntensity.current = Math.abs(intensity); // Positive for smile
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.deformationIntensity.value = deformationIntensity.current;
+      // Add event listeners to update plane size when video metadata loads
+      const video = videoRef.current;
+      const handleLoadedMetadata = () => {
+        console.log('Video metadata loaded, updating plane size');
+        setTimeout(() => updateVideoPlaneSize(), 100); // Small delay to ensure dimensions are available
+      };
+      
+      video.addEventListener('loadedmetadata', handleLoadedMetadata);
+      video.addEventListener('resize', updateVideoPlaneSize);
+      
+      // Cleanup function
+      return () => {
+        video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        video.removeEventListener('resize', updateVideoPlaneSize);
+      };
     }
-  }, []);
-
-  const setGrimaceIntensity = useCallback((intensity: number) => {
-    deformationIntensity.current = -Math.abs(intensity); // Negative for grimace
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.deformationIntensity.value = deformationIntensity.current;
-    }
-  }, []);
-
-  const setDeformationRadius = useCallback((radius: number) => {
-    deformationRadius.current = Math.max(0.05, Math.min(0.3, radius)); // Clamp between 0.05 and 0.3
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.deformationRadius.value = deformationRadius.current;
-    }
-  }, []);
-
-  const setAnchorOffsetX = useCallback((offsetX: number) => {
-    anchorOffsetX.current = Math.max(-0.2, Math.min(0.2, offsetX)); // Clamp between -0.2 and 0.2
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.anchorOffset.value = new THREE.Vector2(anchorOffsetX.current, anchorOffsetY.current);
-    }
-  }, []);
-
-  const setAnchorOffsetY = useCallback((offsetY: number) => {
-    anchorOffsetY.current = Math.max(-0.2, Math.min(0.2, offsetY)); // Clamp between -0.2 and 0.2
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.anchorOffset.value = new THREE.Vector2(anchorOffsetX.current, anchorOffsetY.current);
-    }
-  }, []);
+  }, [size.height, size.width, videoAspectRatio, updateVideoPlaneSize]);
 
   const toggleFaceBoundingBox = useCallback(() => {
     setShowFaceBoundingBox(prev => {
@@ -429,28 +282,15 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   // Expose control functions globally for testing
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      (window as any).lipControls = {
-        setSmileIntensity,
-        setGrimaceIntensity,
-        setDeformationRadius,
-        setAnchorOffsetX,
-        setAnchorOffsetY,
+      (window as any).faceControls = {
         toggleFaceBoundingBox,
-        getCurrentIntensity: () => deformationIntensity.current,
-        getCurrentRadius: () => deformationRadius.current,
-        getCurrentAnchorOffset: () => ({ x: anchorOffsetX.current, y: anchorOffsetY.current }),
         getFaceBoundingBoxVisible: () => showFaceBoundingBox
       };
       
-      console.log("Lip deformation controls available:");
-      console.log("window.lipControls.setSmileIntensity(1.0) // 0.0 to 3.0");
-      console.log("window.lipControls.setGrimaceIntensity(1.0) // 0.0 to 3.0");
-      console.log("window.lipControls.setDeformationRadius(0.15) // 0.05 to 0.3");
-      console.log("window.lipControls.setAnchorOffsetX(0.0) // -0.2 to 0.2");
-      console.log("window.lipControls.setAnchorOffsetY(0.02) // -0.2 to 0.2");
-      console.log("window.lipControls.toggleFaceBoundingBox() // toggle face bounding box visibility");
+      console.log("Face detection controls available:");
+      console.log("window.faceControls.toggleFaceBoundingBox() // toggle face bounding box visibility");
     }
-  }, [setSmileIntensity, setGrimaceIntensity, setDeformationRadius, setAnchorOffsetX, setAnchorOffsetY, toggleFaceBoundingBox, showFaceBoundingBox]);
+  }, [toggleFaceBoundingBox, showFaceBoundingBox]);
 
   useEffect(() => {  
     createLocalVideoTrack({
@@ -469,6 +309,44 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       setTimeout(() => {
         setupFaceLandmarker();
       }, 2000);
+    }).catch((error) => {
+      console.error("Error creating video track with preferred resolution, trying fallback:", error);
+      // Fallback to other 9:16 resolutions if the preferred one fails
+      const fallbackResolutions = [
+        { width: 720, height: 1280 }, // 720p 9:16
+        { width: 540, height: 960 },  // 540p 9:16
+        { width: 360, height: 640 },  // 360p 9:16
+      ];
+      
+      const tryFallback = async (resolutions: typeof fallbackResolutions) => {
+        for (const resolution of resolutions) {
+          try {
+            const track = await createLocalVideoTrack({
+              facingMode: "user",
+              resolution: { 
+                ...resolution,
+                frameRate: 60 
+              },
+            });
+            track.attach(videoRef.current!);
+            animate.current();
+            console.log(`Successfully created video track with resolution: ${resolution.width}x${resolution.height}`);
+            
+            // Setup FaceLandmarker after video is ready
+            setTimeout(() => {
+              setupFaceLandmarker();
+            }, 2000);
+            return;
+          } catch (fallbackError) {
+            console.warn(`Failed to create video track with resolution ${resolution.width}x${resolution.height}:`, fallbackError);
+          }
+        }
+        throw new Error("All video track creation attempts failed");
+      };
+      
+      tryFallback(fallbackResolutions).catch((finalError) => {
+        console.error("Failed to create video track with any resolution:", finalError);
+      });
     });
   }, [setupFaceLandmarker]);
 
@@ -477,20 +355,42 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (!cameraRef.current) return;
     if (!size.width || !size.height) return;
     
-    canvasRef.current.width = size.width + 1;
-    canvasRef.current.height = size.height;
-    rendererRef.current?.setSize(size.width, size.height);
+    // Calculate canvas dimensions based on 9:16 camera frustum (not video aspect ratio)
+    const cameraAspectRatio = 9 / 16; // Fixed 9:16 aspect ratio for camera
+    const canvasHeight = size.height;
+    const canvasWidth = canvasHeight * cameraAspectRatio; // Use camera aspect ratio for canvas
     
-    // Update orthographic camera frustum
-    const aspect = size.width / size.height;
-    const frustumSize = 2; // Keep consistent with initial setup
+    // Set canvas dimensions with proper pixel ratio handling
+    const pixelRatio = Math.min(window.devicePixelRatio, 2);
+    canvasRef.current.width = canvasWidth * pixelRatio;
+    canvasRef.current.height = canvasHeight * pixelRatio;
+    canvasRef.current.style.width = `${canvasWidth}px`;
+    canvasRef.current.style.height = `${canvasHeight}px`;
+    rendererRef.current?.setSize(canvasWidth, canvasHeight, false);
     
-    cameraRef.current.left = (-frustumSize * aspect) / 2;
-    cameraRef.current.right = (frustumSize * aspect) / 2;
-    cameraRef.current.top = frustumSize / 2;
-    cameraRef.current.bottom = -frustumSize / 2;
+    // Update orthographic camera frustum with fixed 9:16 dimensions
+    // 2. Create a video texture plane that matches the aspect ratio of the capture video
+    const planeWidth = 2; // Fixed width
+    const planeHeight = planeWidth / videoAspectRatio; // Height calculated from video aspect ratio
+    
+    // 3. Maintain a 9:16 frustum for the threejs camera (fixed dimensions)
+    const frustumWidth = 2; // Fixed frustum width
+    const frustumHeight = frustumWidth / cameraAspectRatio; // Fixed frustum height for 9:16
+    
+    cameraRef.current.left = -frustumWidth / 2;
+    cameraRef.current.right = frustumWidth / 2;
+    cameraRef.current.top = frustumHeight / 2;
+    cameraRef.current.bottom = -frustumHeight / 2;
     cameraRef.current.updateProjectionMatrix();
-  }, [size, size.height, size.width]);
+
+    // 4. Adjust the positioning of the camera to fit the width of the video plane
+    // Calculate the scale factor to fit the video plane width within the camera frustum
+    const scaleFactor = frustumWidth / planeWidth;
+    const baseDistance = 5; // Base camera distance
+    const adjustedDistance = baseDistance / scaleFactor;
+    
+    cameraRef.current.position.set(0, 0, adjustedDistance);
+  }, [size, size.height, size.width, videoAspectRatio]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -623,94 +523,15 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   return (
     <div className="relative h-full w-full">
-      <div className="overflow-hidden h-full" ref={resizeRef}>
+      <div className="overflow-hidden h-full flex items-center justify-center" ref={resizeRef}>
         <canvas
-          width={size.width}
-          height={size.height}
-          className="h-full w-full"
+          className="h-full"
+          style={{ aspectRatio: '9/16' }}
           ref={canvasRef}
         />
       </div>
       <div className="absolute w-[0px] h-[0px] bottom-2 right-2 overflow-hidden">
         <video className="h-full w-full" ref={videoRef} />
-      </div>
-      
-      {/* Control Panel */}
-      <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-4 rounded max-w-xs">
-        <h3 className="text-sm font-bold mb-2">Lip Deformation Controls</h3>
-        
-        {/* Intensity Controls */}
-        <div className="space-y-2 text-xs mb-4">
-          <button 
-            onClick={() => setSmileIntensity(1.5)}
-            className="block w-full bg-green-600 hover:bg-green-700 px-2 py-1 rounded"
-          >
-            Smile
-          </button>
-          <button 
-            onClick={() => setGrimaceIntensity(1.5)}
-            className="block w-full bg-red-600 hover:bg-red-700 px-2 py-1 rounded"
-          >
-            Grimace
-          </button>
-          <button 
-            onClick={() => setSmileIntensity(0)}
-            className="block w-full bg-gray-600 hover:bg-gray-700 px-2 py-1 rounded"
-          >
-            Reset
-          </button>
-          <button 
-            onClick={toggleFaceBoundingBox}
-            className={`block w-full px-2 py-1 rounded ${
-              showFaceBoundingBox 
-                ? 'bg-cyan-600 hover:bg-cyan-700' 
-                : 'bg-gray-600 hover:bg-gray-700'
-            }`}
-          >
-            {showFaceBoundingBox ? 'Hide Face Box' : 'Show Face Box'}
-          </button>
-        </div>
-
-        {/* Radial Distance Control */}
-        <div className="mb-3">
-          <label className="text-xs block mb-1">Radial Distance: {deformationRadius.current.toFixed(2)}</label>
-          <input
-            type="range"
-            min="0.05"
-            max="0.3"
-            step="0.01"
-            defaultValue={deformationRadius.current}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            onChange={(e) => setDeformationRadius(parseFloat(e.target.value))}
-          />
-        </div>
-
-        {/* Anchor Point Controls */}
-        <div className="mb-3">
-          <label className="text-xs block mb-1">Anchor Offset X: {anchorOffsetX.current.toFixed(2)}</label>
-          <input
-            type="range"
-            min="-0.2"
-            max="0.2"
-            step="0.01"
-            defaultValue={anchorOffsetX.current}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            onChange={(e) => setAnchorOffsetX(parseFloat(e.target.value))}
-          />
-        </div>
-
-        <div className="mb-3">
-          <label className="text-xs block mb-1">Anchor Offset Y: {anchorOffsetY.current.toFixed(2)}</label>
-          <input
-            type="range"
-            min="-0.2"
-            max="0.2"
-            step="0.01"
-            defaultValue={anchorOffsetY.current}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            onChange={(e) => setAnchorOffsetY(parseFloat(e.target.value))}
-          />
-        </div>
       </div>
     </div>
   );

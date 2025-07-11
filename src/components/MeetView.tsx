@@ -138,55 +138,48 @@ export function MeetView() {
   }
 
   return (
-    <div className="flex h-full w-full">
-      <div className="w-4/5">
+    <div className="relative flex h-full w-full">
+      <div className="h-[100vh] w-[100vw]">
         <LocalVideoView
           onCanvasStreamChanged={(ms) => {
             setCavasStream(ms);
           }}
         />
       </div>
-      <div className="flex flex-col w-1/5 h-full">
-        {isDirty ? (
-          <div className="bg-red-400">
-            Changes have been rename. Re start broadcast for them to take effect
-          </div>
-        ) : null}
-        <EgressDestination
-          type="Twitch"
-          setEnabled={setEnabled("twitch")}
-          setStreamKey={setStreamKey("twitch")}
-          enabled={twitchEnabled}
-          streamKey={twitchStreamKey}
-        />
-        <EgressDestination
-          type="YouTube"
-          setEnabled={setEnabled("youtube")}
-          setStreamKey={setStreamKey("youtube")}
-          enabled={youtubeEnabled}
-          streamKey={youtubeStreamKey}
-        />
-        <a
-          className="link p-2"
-          target="_blank"
-          rel="noreferrer"
-          href={viewerLink}
-        >
-          Preview Link
-        </a>
-        <div className="grow" />
-        <button
-          className={`btn m-2 ${broadcastLoading ? "loading" : ""}`}
-          onClick={async () => {
-            if (isLive) {
-              await stopBroadcast();
-            } else {
-              await broadcast();
-            }
-          }}
-        >
-          {broadcastButtonText}
-        </button>
+      
+      {/* Floating Bottom Bar */}
+      <div className="absolute bottom-4 left-4 right-4 bg-black bg-opacity-80 backdrop-blur-sm rounded-lg p-4 flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <a
+            className="text-white hover:text-blue-400 transition-colors underline"
+            target="_blank"
+            rel="noreferrer"
+            href={viewerLink}
+          >
+            Preview Link
+          </a>
+        </div>
+        
+        <div className="flex items-center space-x-4">
+          <button
+            className={`px-6 py-2 rounded-md font-medium transition-colors ${
+              isLive 
+                ? 'bg-red-600 hover:bg-red-700 text-white' 
+                : 'bg-green-600 hover:bg-green-700 text-white'
+            } ${broadcastLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            onClick={async () => {
+              if (broadcastLoading) return;
+              if (isLive) {
+                await stopBroadcast();
+              } else {
+                await broadcast();
+              }
+            }}
+            disabled={broadcastLoading}
+          >
+            {broadcastLoading ? 'Loading...' : broadcastButtonText}
+          </button>
+        </div>
       </div>
     </div>
   );
