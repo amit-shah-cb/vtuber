@@ -4,8 +4,12 @@ import { BottomBar } from "@/components/BottomBar";
 import { LiveKitRoom } from "@livekit/components-react";
 import { useCallback, useEffect, useState } from "react";
 import { useMobile } from "@/util/useMobile";
-import { MeetView } from "@/components/MeetView";
 import { ConnectionDetails } from "@/pages/api/connection_details";
+import dynamic from "next/dynamic";
+
+const MeetView = dynamic(() => import("@/components/MeetView").then(mod => ({ default: mod.MeetView })), {
+  ssr: false,
+});
 
 export default function Page() {
   const isMobile = useMobile();
@@ -44,18 +48,16 @@ export default function Page() {
       >
         <div className="flex h-screen w-screen">
           <div
-            className={`flex ${
-              isMobile ? "flex-col-reverse" : "flex-col"
-            } w-full h-full`}
+            className={`flex w-full h-full`}
           >
             <div className="grow flex">
               <div className="grow">
                 <MeetView />
               </div>
             </div>
-            <div className="bg-neutral">
+            {/* <div className="bg-neutral">
               <BottomBar />
-            </div>
+            </div> */}
           </div>
         </div>
       </LiveKitRoom>

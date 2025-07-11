@@ -290,8 +290,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     createLocalVideoTrack({
       facingMode: "user",
       resolution: { 
-        width: 1080, 
-        height: 1920, 
+        width: 1024, 
+        height: 768, 
         frameRate: 30 
       },
     }).then((t) => {
