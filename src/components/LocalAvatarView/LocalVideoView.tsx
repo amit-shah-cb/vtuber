@@ -12,6 +12,15 @@ import {
   FACEMESH_RIGHT_EYEBROW, 
   FACEMESH_FACE_OVAL 
 } from "@mediapipe/face_mesh";
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { RGBShiftShader } from 'three/examples/jsm/shaders/RGBShiftShader.js';
+import { FilmShader } from 'three/examples/jsm/shaders/FilmShader.js';
+import { CopyShader } from 'three/examples/jsm/shaders/CopyShader.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { BadTVShader } from '../shaders/BadTVShader';
+import { StaticShader } from '../shaders/StaticShader';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 type Props = {
   onCanvasStreamChanged: (canvasStream: MediaStream | null) => void;
@@ -87,6 +96,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const faceNormalVectorRef = useRef<THREE.ArrowHelper | null>(null);
   const [showFaceBoundingBox, setShowFaceBoundingBox] = useState(false);
   const size = useResizeObserver({ ref: resizeRef });
+  const composerRef = useRef<EffectComposer | null>(null);
 
   // Official MediaPipe face mesh indices for specific facial features
   const faceIndices = useRef<number[]>([]);
@@ -124,14 +134,19 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const animate = useRef(() => {
     requestAnimationFrame(animate.current);
     // Update video texture if available
-    if (videoTextureRef.current) {
-      videoTextureRef.current.needsUpdate = true;
-    }
+    // if (videoTextureRef.current) {
+    videoTextureRef.current!.needsUpdate = true;
+    // }
     // Update orbit controls
-    if (controlsRef.current) {
-      controlsRef.current.update();
+    // if (controlsRef.current) {
+      controlsRef.current!.update();
+    // }
+    // Use composer if available, else fallback to renderer
+    if (composerRef.current) {
+      composerRef.current.render();
+    } else if (rendererRef.current && sceneRef.current && cameraRef.current) {
+      rendererRef.current.render(sceneRef.current, cameraRef.current);
     }
-    rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
   });
 
   const initializeFaceMesh = useCallback(() => {
@@ -383,6 +398,81 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight, 128, 96);
         planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current!);
         sceneRef.current!.add(planeRef.current);
+
+        // --- POST-PROCESSING SETUP ---
+        if (rendererRef.current && sceneRef.current && cameraRef.current) {
+          const composer = new EffectComposer(rendererRef.current);
+          const w = typeof size.width === 'number' ? size.width : 640;
+          const h = typeof size.height === 'number' ? size.height : 480;
+          composer.setSize(w, h);
+          composerRef.current = composer;
+      
+          // Create Shader Passes
+          const renderPass = new RenderPass(sceneRef.current, cameraRef.current);
+          const badTVPass = new ShaderPass(BadTVShader);
+          const rgbPass = new ShaderPass(RGBShiftShader);
+          const filmPass = new ShaderPass(FilmShader);
+          const staticPass = new ShaderPass(StaticShader);
+          const copyPass = new ShaderPass(CopyShader);
+          const bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.2, 0.5, 0.5);
+          // Set shader uniforms
+          filmPass.uniforms['grayscale'].value = 0;
+      
+          // Initialize shader parameters
+          const badTVParams = {
+            mute: true,
+            show: true,
+            distortion: 1.3,
+            distortion2: 1.0,
+            speed: 10.3,
+            rollSpeed: 10.1,
+          };
+      
+          const staticParams = {
+            show: true,
+            amount: 0.1,
+            size: .05,
+          };
+      
+          const rgbParams = {
+            show: true,
+            amount: 0.005,
+            angle: 0.1,
+          };
+      
+          const filmParams = {
+            show: true,
+            count: 800,
+            sIntensity: 0.4,
+            nIntensity: 0.2,
+          };
+      
+          // Apply parameters to shader uniforms
+          badTVPass.uniforms['distortion'].value = badTVParams.distortion;
+          badTVPass.uniforms['distortion2'].value = badTVParams.distortion2;
+          badTVPass.uniforms['speed'].value = badTVParams.speed;
+          badTVPass.uniforms['rollSpeed'].value = badTVParams.rollSpeed;
+      
+          staticPass.uniforms['amount'].value = staticParams.amount;
+          staticPass.uniforms['size'].value = staticParams.size;
+      
+          rgbPass.uniforms['angle'].value = rgbParams.angle;
+          rgbPass.uniforms['amount'].value = rgbParams.amount;
+      
+          // filmPass.uniforms['sCount'].value = filmParams.count;
+          // filmPass.uniforms['sIntensity'].value = filmParams.sIntensity;
+          // filmPass.uniforms['nIntensity'].value = filmParams.nIntensity;
+      
+          // Add passes to composer
+          composerRef.current.addPass(renderPass);
+          // if (badTVParams.show) composerRef.current.addPass(badTVPass);
+          composerRef.current.addPass(bloomPass);
+          if (rgbParams.show) composerRef.current.addPass(rgbPass);
+          
+          // if (filmParams.show) composerRef.current.addPass(filmPass);
+          // if (staticParams.show) composerRef.current.addPass(staticPass);
+          composerRef.current.addPass(copyPass);
+        }
       };
     }
   }, [size.height, size.width]);
