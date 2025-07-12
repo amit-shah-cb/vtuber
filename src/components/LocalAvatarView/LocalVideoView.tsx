@@ -99,21 +99,15 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   const updateFaceMesh = useCallback((landmarks: any[]) => {
     if (!faceGeometryRef.current || !faceMaterialRef.current || !landmarks || landmarks.length === 0) return;
-    if (!planeRef.current) return;
     
     const vertices = faceGeometryRef.current.attributes.position.array as Float32Array;
     
-    // Get the current plane dimensions
-    const planeGeometry = planeRef.current.geometry as THREE.PlaneGeometry;
-    const planeWidth = planeGeometry.parameters.width;
-    const planeHeight = planeGeometry.parameters.height;
-    
     landmarks.forEach((landmark, index) => {
-      // Convert normalized coordinates to world space using actual plane dimensions
+      // Convert normalized coordinates to world space
       // Since mesh is rotated 180° around Y-axis, flip X coordinate to match movement direction
-      const x = (0.5 - landmark.x) * planeWidth;        // Flip X back to match video movement direction
-      const y = (0.5 - landmark.y) * planeHeight;       // Flip Y to match video texture and scale
-      const z = landmark.z * 0.5 || 0;                  // Scale Z depth
+      const x = (0.5 - landmark.x) * 2;        // Flip X back to match video movement direction
+      const y = (0.5 - landmark.y) * 1.5;      // Flip Y to match video texture and scale
+      const z = landmark.z * 0.5 || 0;         // Scale Z depth
       
       vertices[index * 3] = x;
       vertices[index * 3 + 1] = y;
@@ -255,21 +249,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       }
     }
 
-    // Calculate plane dimensions to maintain video aspect ratio
-    const videoAspect = 1024 / 768; // 4:3 aspect ratio from camera
-    const canvasAspect = size.width / size.height;
-    
-    let planeWidth, planeHeight;
-    
-    if (canvasAspect > videoAspect) {
-      // Canvas is wider than video - fit to height
-      planeHeight = 2;
-      planeWidth = planeHeight * videoAspect;
-    } else {
-      // Canvas is taller than video - fit to width
-      planeWidth = 2;
-      planeHeight = planeWidth / videoAspect;
-    }
+    // Since we're maintaining 4:3 aspect ratio in both canvas and video capture,
+    // we can use a simple plane that fills the view
+    const planeWidth = 2;
+    const planeHeight = 1.5; // 4:3 aspect ratio
     
     // Create plane geometry to display video with correct aspect ratio
     const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
@@ -353,10 +336,26 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (!cameraRef.current) return;
     if (!size.width || !size.height) return;
     
-    canvasRef.current.width = size.width + 1;
-    canvasRef.current.height = size.height;
-    rendererRef.current?.setSize(size.width, size.height);
-    cameraRef.current.aspect = size.width / size.height;
+    // Calculate canvas dimensions that maintain 4:3 aspect ratio while fitting in container
+    const videoAspect = 4 / 3; // 4:3 aspect ratio
+    const containerAspect = size.width / size.height;
+    
+    let canvasWidth, canvasHeight;
+    
+    if (containerAspect > videoAspect) {
+      // Container is wider than video aspect - fit to height
+      canvasHeight = size.height;
+      canvasWidth = canvasHeight * videoAspect;
+    } else {
+      // Container is taller than video aspect - fit to width
+      canvasWidth = size.width;
+      canvasHeight = canvasWidth / videoAspect;
+    }
+    
+    canvasRef.current.width = canvasWidth;
+    canvasRef.current.height = canvasHeight;
+    rendererRef.current?.setSize(canvasWidth, canvasHeight);
+    cameraRef.current.aspect = canvasWidth / canvasHeight;
     cameraRef.current.updateProjectionMatrix();
   }, [size, size.height, size.width]);
 
@@ -377,12 +376,12 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, [updateVideoPlane]);
 
   return (
-    <div className="relative h-full w-full">
-      <div className="overflow-hidden h-full" ref={resizeRef}>
+    <div className="relative h-full w-full flex items-center justify-center bg-black" ref={resizeRef}>
+      <div className="relative">
         <canvas
           width={size.width}
           height={size.height}
-          className="h-full w-full"
+          className="max-h-full max-w-full object-contain"
           ref={canvasRef}
         />
       </div>
