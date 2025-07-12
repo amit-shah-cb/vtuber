@@ -370,10 +370,17 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         vertexShader: lipDeformationVertexShader,
         fragmentShader: lipDeformationFragmentShader
       });
-
-      // Create plane geometry with high subdivision for smooth deformation
-      const geometry = new THREE.PlaneGeometry(1.5, 2, 128, 96);
       
+      // const videoAspect =1;// videoRef.current.videoWidth / videoRef.current.videoHeight || 16/9;
+      // var geometry: THREE.PlaneGeometry; 
+      // if (videoAspect <1) {
+      //   // Landscape
+      //   geometry = new THREE.PlaneGeometry(2, 2 / videoAspect, 128, 96);
+      // } else {
+      //   // Portrait
+      //   geometry = new THREE.PlaneGeometry(2*videoAspect, 2, 128, 96);
+      // }       
+      const geometry = new THREE.PlaneGeometry(2, 2, 128, 96);
       planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current);
       sceneRef.current.add(planeRef.current);
     }
