@@ -395,29 +395,13 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (!cameraRef.current) return;
     if (!size.width || !size.height) return;
     
-    // Calculate canvas dimensions that maintain 4:3 aspect ratio while fitting in container
-    const containerAspect = size.width / size.height;
-    
-    let canvasWidth, canvasHeight;
-    
-    if (containerAspect > VIDEO_ASPECT) {
-      // Container is wider than video aspect - fit to height
-      canvasHeight = Math.min(size.height, size.width / VIDEO_ASPECT);
-      canvasWidth = canvasHeight * VIDEO_ASPECT;
-    } else {
-      // Container is taller than video aspect - fit to width
-      canvasWidth = Math.min(size.width, size.height * VIDEO_ASPECT);
-      canvasHeight = canvasWidth / VIDEO_ASPECT;
-    }
-    
-    // Ensure canvas doesn't exceed container bounds
-    canvasWidth = Math.min(canvasWidth, size.width);
-    canvasHeight = Math.min(canvasHeight, size.height);
+    // Always use a fixed canvas resolution that maintains 4:3 aspect ratio
+    // Let CSS handle the display sizing
+    const canvasWidth = 800;  // Fixed width
+    const canvasHeight = 600; // Fixed height (4:3 ratio)
     
     canvasRef.current.width = canvasWidth;
     canvasRef.current.height = canvasHeight;
-    canvasRef.current.style.width = `${canvasWidth}px`;
-    canvasRef.current.style.height = `${canvasHeight}px`;
     
     rendererRef.current?.setSize(canvasWidth, canvasHeight);
     cameraRef.current.aspect = canvasWidth / canvasHeight;
@@ -488,13 +472,12 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, []);
 
   return (
-    <div className="relative h-full w-full flex items-center justify-center bg-black overflow-hidden" ref={resizeRef}>
-      <div className="relative flex-shrink-0">
-        <canvas
-          className="block"
-          ref={canvasRef}
-        />
-      </div>
+    <div className="relative h-full w-full flex items-center justify-center bg-black" ref={resizeRef}>
+      <canvas
+        className="max-h-full max-w-full object-contain"
+        style={{ aspectRatio: '4/3' }}
+        ref={canvasRef}
+      />
       <div className="absolute w-[0px] h-[0px] bottom-2 right-2 overflow-hidden">
         <video className="h-full w-full" ref={videoRef} />
       </div>
