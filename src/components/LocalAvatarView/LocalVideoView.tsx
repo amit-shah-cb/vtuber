@@ -370,19 +370,19 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         vertexShader: lipDeformationVertexShader,
         fragmentShader: lipDeformationFragmentShader
       });
-      
-      // const videoAspect =1;// videoRef.current.videoWidth / videoRef.current.videoHeight || 16/9;
-      // var geometry: THREE.PlaneGeometry; 
-      // if (videoAspect <1) {
-      //   // Landscape
-      //   geometry = new THREE.PlaneGeometry(2, 2 / videoAspect, 128, 96);
-      // } else {
-      //   // Portrait
-      //   geometry = new THREE.PlaneGeometry(2*videoAspect, 2, 128, 96);
-      // }       
-      const geometry = new THREE.PlaneGeometry(2, 1.5, 128, 96);
-      planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current);
-      sceneRef.current.add(planeRef.current);
+
+      // Wait for video metadata to load to get correct aspect ratio
+      videoRef.current.onloadedmetadata = () => {
+        const videoWidth = videoRef.current!.videoWidth;
+        const videoHeight = videoRef.current!.videoHeight;
+        const aspect = videoWidth / videoHeight;
+        // Use a base height of 1, width = aspect
+        const planeHeight = 2;
+        const planeWidth = aspect * planeHeight;
+        const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight, 128, 96);
+        planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current!);
+        sceneRef.current!.add(planeRef.current);
+      };
     }
   }, [size.height, size.width]);
 
