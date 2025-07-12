@@ -39,8 +39,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const VIDEO_WIDTH = 1024;
   const VIDEO_HEIGHT = 768;
   const VIDEO_ASPECT = VIDEO_WIDTH / VIDEO_HEIGHT; // 4:3 aspect ratio
-  const PLANE_WIDTH = 2;
-  const PLANE_HEIGHT = 1.5; // 4:3 aspect ratio to match video
+  const PLANE_WIDTH = 1.5;
+  const PLANE_HEIGHT = 2; // 3:4 aspect ratio (portrait)
 
   // Orientation state
   const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
