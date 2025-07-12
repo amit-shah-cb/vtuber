@@ -527,7 +527,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     console.log('🎯 EFFECT [4/9]: Canvas stream setup [onCanvasStreamChanged]');
     if (!canvasRef.current) return;
     if (canvasStreamRef.current) return;
-    canvasStreamRef.current = canvasRef.current.captureStream(60);
+    canvasStreamRef.current = canvasRef.current.captureStream(30);
     onCanvasStreamChanged(canvasStreamRef.current);
   }, [onCanvasStreamChanged]);
 
