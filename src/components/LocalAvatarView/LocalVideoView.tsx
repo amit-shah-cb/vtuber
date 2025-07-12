@@ -380,7 +380,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       //   // Portrait
       //   geometry = new THREE.PlaneGeometry(2*videoAspect, 2, 128, 96);
       // }       
-      const geometry = new THREE.PlaneGeometry(2, 2, 128, 96);
+      const geometry = new THREE.PlaneGeometry(2, 1.5, 128, 96);
       planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current);
       sceneRef.current.add(planeRef.current);
     }
