@@ -33,6 +33,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const faceMeshRef = useRef<THREE.LineSegments | null>(null);
   const faceGeometryRef = useRef<THREE.BufferGeometry | null>(null);
   const faceMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
+  const faceBoundingBoxRef = useRef<THREE.LineSegments | null>(null);
   const videoTrackRef = useRef<LocalVideoTrack | null>(null);
   const size = useResizeObserver({ ref: resizeRef });
   const isMobile = useMobile();
@@ -325,7 +326,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
             const results = faceLandmarkerRef.current.detectForVideo(videoRef.current, startTimeMs);
             
             if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-              createOrUpdateFaceMesh(results.faceLandmarks);
+              // createOrUpdateFaceMesh(results.faceLandmarks);
+              createOrUpdateFaceBoundingBox(results.faceLandmarks);
             } else {
               // Remove face mesh if no faces found
               removeFaceMesh();
@@ -353,6 +355,125 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, [createOrUpdateFaceMesh, removeFaceMesh]);
 
 
+  const createOrUpdateFaceBoundingBox = useCallback((faceLandmarks: any[]) => {
+    if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) {
+      console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
+      return;
+    }
+    
+    console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
+    
+    const landmarks = faceLandmarks[0];
+    
+    // Calculate bounding box from face landmarks
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    
+    landmarks.forEach((landmark: any) => {
+      // Convert normalized coordinates to world space (same as face mesh)
+      const x = (landmark.x - 0.5) * 2;        // Convert to -1 to +1 range (NOT flipped)
+      const y = (0.5 - landmark.y) * 1.5;      // Flip Y and convert to -0.75 to +0.75 range
+      const z = landmark.z * 0.5 || 0;         // Scale Z depth
+      
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    });
+    
+    // Calculate bounding box dimensions and center
+    const width = maxX - minX;
+    const height = maxY - minY;
+    const depth = maxZ - minZ;
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+    
+    console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
+    
+    // Create or update bounding box plane
+    if (!faceBoundingBoxRef.current) {
+      console.log('Creating new face bounding box outline');
+      
+      // Create outline geometry using line segments
+      const outlineGeometry = new THREE.BufferGeometry();
+      
+      // Define the vertices for a rectangle outline
+      const vertices = new Float32Array([
+        -0.5, -0.5, 0,  // Bottom left
+         0.5, -0.5, 0,  // Bottom right
+         0.5,  0.5, 0,  // Top right
+        -0.5,  0.5, 0   // Top left
+      ]);
+      
+      // Define indices to connect the vertices into a rectangle outline
+      const indices = [
+        0, 1,  // Bottom edge
+        1, 2,  // Right edge
+        2, 3,  // Top edge
+        3, 0   // Left edge
+      ];
+      
+      outlineGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+      outlineGeometry.setIndex(indices);
+      
+      const outlineMaterial = new THREE.LineBasicMaterial({
+        color: 0x00ffff,
+        linewidth: 2,
+        transparent: true,
+        opacity: 0.8
+      });
+      
+      faceBoundingBoxRef.current = new THREE.LineSegments(outlineGeometry, outlineMaterial);
+      sceneRef.current.add(faceBoundingBoxRef.current);
+      console.log('Face bounding box outline created and added to scene');
+    }
+    
+    // Update bounding box size and position
+    faceBoundingBoxRef.current.scale.set(width, height, 1);
+    faceBoundingBoxRef.current.position.set(centerX, centerY, 0.1);
+    console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
+    
+    // Create or update normal vector
+    // if (!faceNormalVectorRef.current) {
+    //   const direction = new THREE.Vector3(0, 0, 1);
+    //   const origin = new THREE.Vector3();
+    //   const length = Math.max(width, height) * 0.5;
+      
+    //   faceNormalVectorRef.current = new THREE.ArrowHelper(
+    //     direction,
+    //     origin,
+    //     length,
+    //     0xff0000, // Red color
+    //     length * 0.2,
+    //     length * 0.1
+    //   );
+      
+    //   sceneRef.current.add(faceNormalVectorRef.current);
+    //   console.log('Face normal vector created and added to scene');
+    // }
+    
+    // // Update normal vector position and size
+    // const normalLength = Math.max(width, height) * 0.5;
+    // faceNormalVectorRef.current.position.set(centerX, centerY, 0.15);
+    // faceNormalVectorRef.current.setLength(normalLength, normalLength * 0.2, normalLength * 0.1);
+    // console.log('Face normal vector updated - position:', centerX, centerY, 0.15);
+  }, []);
+
+  const removeFaceBoundingBox = useCallback(() => {
+    if (faceBoundingBoxRef.current && sceneRef.current) {
+      sceneRef.current.remove(faceBoundingBoxRef.current);
+      faceBoundingBoxRef.current = null;
+    }
+    
+    if (faceNormalVectorRef.current && sceneRef.current) {
+      sceneRef.current.remove(faceNormalVectorRef.current);
+      faceNormalVectorRef.current = null;
+    }
+  }, []);
 
   const setupThreeJS = useCallback(() => {
     console.log('🔄 CALLBACK: setupThreeJS called');
