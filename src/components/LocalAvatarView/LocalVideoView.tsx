@@ -337,19 +337,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     const light = new THREE.AmbientLight(0xffffff, 1);
     sceneRef.current.add(light);
 
-    // Create video texture when video is ready
-    if (videoRef.current) {
-      videoTextureRef.current = new THREE.VideoTexture(videoRef.current);
-      videoTextureRef.current.flipY = true;
-      videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
-      videoTextureRef.current.minFilter = THREE.LinearFilter;
-      videoTextureRef.current.magFilter = THREE.LinearFilter;
-      videoTextureRef.current.format = THREE.RGBAFormat;
-      videoTextureRef.current.generateMipmaps = false;
-      
-      // Create the video plane
-      updateVideoPlane();
-    }
+    // Video texture will be created when video loads in createVideoTrack
   }, [size.height, size.width, updateVideoPlane, adjustCameraForDevice]);
 
   // Create video track with standard resolution
@@ -376,8 +364,27 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       // Wait for video to be ready before starting
       videoRef.current!.onloadedmetadata = () => {
         console.log(`Video loaded: ${videoRef.current!.videoWidth}x${videoRef.current!.videoHeight}`);
+        console.log(`Video track settings:`, videoTrackRef.current?.mediaStreamTrack.getSettings());
         
-        // Start animation loop after video is loaded
+        // Create video texture now that video is fully loaded
+        if (videoRef.current && sceneRef.current && !videoTextureRef.current) {
+          videoTextureRef.current = new THREE.VideoTexture(videoRef.current);
+          videoTextureRef.current.flipY = true;
+          videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
+          videoTextureRef.current.minFilter = THREE.LinearFilter;
+          videoTextureRef.current.magFilter = THREE.LinearFilter;
+          videoTextureRef.current.format = THREE.RGBAFormat;
+          videoTextureRef.current.generateMipmaps = false;
+          videoTextureRef.current.wrapS = THREE.ClampToEdgeWrapping;
+          videoTextureRef.current.wrapT = THREE.ClampToEdgeWrapping;
+          
+          console.log('Video texture created with consistent settings');
+          
+          // Create the video plane with proper texture
+          updateVideoPlane();
+        }
+        
+        // Start animation loop after video and texture are ready
         animate.current();
         
         // Setup FaceLandmarker after video is ready
@@ -385,13 +392,35 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
           setupFaceMesh();
         }, 1000);
       };
+      
+      // Monitor for unwanted video track changes
+      videoRef.current!.onresize = () => {
+        console.log(`Video resized: ${videoRef.current!.videoWidth}x${videoRef.current!.videoHeight}`);
+        if (videoTrackRef.current) {
+          console.log(`Track settings after resize:`, videoTrackRef.current.mediaStreamTrack.getSettings());
+        }
+      };
     } catch (error) {
       console.error("Error creating video track:", error);
     }
-  }, [setupFaceMesh]);
+  }, [setupFaceMesh, updateVideoPlane]);
 
   useEffect(() => {  
     createVideoTrack();
+    
+    // Prevent video track recreation on orientation changes
+    const handleOrientationChange = (e: Event) => {
+      e.preventDefault();
+      // Don't recreate video track on orientation changes
+      console.log('Orientation change detected, maintaining existing video track');
+    };
+    
+    // Listen for orientation changes but don't recreate video
+    window.addEventListener('orientationchange', handleOrientationChange);
+    
+    return () => {
+      window.removeEventListener('orientationchange', handleOrientationChange);
+    };
   }, [createVideoTrack]);
 
   useEffect(() => {

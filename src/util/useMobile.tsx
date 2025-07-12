@@ -5,17 +5,13 @@ export const useMobile = () => {
   
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const checkMobile = () => {
-        const userAgent = navigator.userAgent;
-        const mobileRegex = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i;
-        setIsMobile(mobileRegex.test(userAgent));
-      };
+      const userAgent = navigator.userAgent;
+      const mobileRegex = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i;
+      const isMobileDevice = mobileRegex.test(userAgent);
+      setIsMobile(isMobileDevice);
       
-      checkMobile();
-      
-      // Listen for resize events in case orientation changes
-      window.addEventListener('resize', checkMobile);
-      return () => window.removeEventListener('resize', checkMobile);
+      // No need for resize listener since user agent doesn't change
+      // Device type is determined once and stays constant
     }
   }, []);
   
