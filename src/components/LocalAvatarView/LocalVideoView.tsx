@@ -24,7 +24,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const resizeRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const canvasStreamRef = useRef<MediaStream | null>(null);
   const videoTextureRef = useRef<THREE.VideoTexture | null>(null);
   const planeRef = useRef<THREE.Mesh | null>(null);
@@ -154,15 +154,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const adjustCameraForDevice = useCallback(() => {
     console.log('🔄 CALLBACK: adjustCameraForDevice called', {isMobile});
     if (!cameraRef.current) return;
-    
-    if (isMobile) {
-      // Move camera closer for mobile to show more of the face
-      cameraRef.current.position.z = 1.5;
-    } else {
-      // Move camera back for desktop to show full frame
-      cameraRef.current.position.z = 2;
-    }
-    
+    cameraRef.current.position.z = 2;
     cameraRef.current.updateProjectionMatrix();
   }, [isMobile]);
 
@@ -398,23 +390,23 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     // Calculate bounding box dimensions and center
     const width = maxX - minX;
     const height = maxY - minY;
-    const depth = maxZ - minZ;
+   
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
     const centerZ = (minZ + maxZ) / 2;
-
-    // Create or update the shape in the XY plane at z=0 (we'll position and scale it later)
-    const halfWidth = width / 2;
-    const halfHeight = height / 2;
-    // Reuse Vector2s for corners
-    const corners = boundingBoxCornersRef.current;
-    corners[0].set(-halfWidth, -halfHeight); // Bottom left
-    corners[1].set(halfWidth, -halfHeight);  // Bottom right
-    corners[2].set(halfWidth, halfHeight);   // Top right
-    corners[3].set(-halfWidth, halfHeight);  // Top left
-
-    // Only create the shape, geometry, material, and mesh once
-    if (!faceBoundingBoxShapeRef.current) {
+ // On every update, just move and scale the mesh
+ if (faceBoundingBoxRef.current) {
+    faceBoundingBoxRef.current.position.set(centerX, centerY, centerZ);      
+    faceBoundingBoxRef.current.scale.set(width, height, 1);
+  }else{
+        // Create or update the shape in the XY plane at z=0 (we'll position and scale it later)
+     
+      // Reuse Vector2s for corners
+      const corners = boundingBoxCornersRef.current;
+      corners[0].set(-width, -height); // Bottom left
+      corners[1].set(width, -height);  // Bottom right
+      corners[2].set(width, height);   // Top right
+      corners[3].set(-width, height);  // Top left
       faceBoundingBoxShapeRef.current = new THREE.Shape(corners);
       faceBoundingBoxGeometryRef.current = new THREE.ShapeGeometry(faceBoundingBoxShapeRef.current);
       faceBoundingBoxMaterialRef.current = new THREE.MeshBasicMaterial({
@@ -426,52 +418,9 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       faceBoundingBoxRef.current = new THREE.Mesh(faceBoundingBoxGeometryRef.current, faceBoundingBoxMaterialRef.current);
       sceneRef.current.add(faceBoundingBoxRef.current);
     }
-    // On every update, just move and scale the mesh
-    if (faceBoundingBoxRef.current) {
-      // Reuse Vector3 for center
-      const center = boundingBoxCenterRef.current;
-      center.set(centerX, centerY, centerZ);
-      faceBoundingBoxRef.current.position.copy(center);
-      // Compute scale factor based on distance from camera to centerZ
-      let scale = 1;
-      if (cameraRef.current) {
-        const camera = cameraRef.current;
-        // Reuse Vector3 for camToBox
-        const camToBox = boundingBoxCamToBoxRef.current;
-        camToBox.copy(center);
-        const camDistance = camToBox.distanceTo(camera.position);
-        const referenceDistance = Math.abs(camera.position.z);
-        scale = referenceDistance / camDistance;
-      }
-      faceBoundingBoxRef.current.scale.set(scale, scale, 1);
-    }
+   
     
-    // console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
-    
-    // Create or update normal vector
-    // if (!faceNormalVectorRef.current) {
-    //   const direction = new THREE.Vector3(0, 0, 1);
-    //   const origin = new THREE.Vector3();
-    //   const length = Math.max(width, height) * 0.5;
-      
-    //   faceNormalVectorRef.current = new THREE.ArrowHelper(
-    //     direction,
-    //     origin,
-    //     length,
-    //     0xff0000, // Red color
-    //     length * 0.2,
-    //     length * 0.1
-    //   );
-      
-    //   sceneRef.current.add(faceNormalVectorRef.current);
-    //   console.log('Face normal vector created and added to scene');
-    // }
-    
-    // // Update normal vector position and size
-    // const normalLength = Math.max(width, height) * 0.5;
-    // faceNormalVectorRef.current.position.set(centerX, centerY, 0.15);
-    // faceNormalVectorRef.current.setLength(normalLength, normalLength * 0.2, normalLength * 0.1);
-    // console.log('Face normal vector updated - position:', centerX, centerY, 0.15);
+   
   }, []);
 
   const removeFaceBoundingBox = useCallback(() => {
@@ -504,14 +453,18 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     // Set pixel ratio for crisp rendering on high-DPI displays
     rendererRef.current.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     
-    // Create camera with default aspect ratio (will be updated when container is measured)
-    cameraRef.current = new THREE.PerspectiveCamera(
-      45,
-      16 / 9, // Default aspect ratio
-      0.1,
-      1000
-    );
+    // Create orthographic camera (will be updated when container is measured)
+    const width = canvasRef.current.clientWidth || 800;
+    const height = canvasRef.current.clientHeight || 600;
+    const aspect = width / height;
+    const frustumSize = 2; // Match the plane size logic
+    const left = -frustumSize * aspect / 2;
+    const right = frustumSize * aspect / 2;
+    const top = frustumSize / 2;
+    const bottom = -frustumSize / 2;
+    cameraRef.current = new THREE.OrthographicCamera(left, right, top, bottom, 0.1, 1000);
     cameraRef.current.position.z = 2;
+    cameraRef.current.updateProjectionMatrix();
     
     // Apply device-based camera adjustments
     adjustCameraForDevice();
@@ -647,7 +600,13 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     canvasRef.current.height = height;
     
     rendererRef.current.setSize(width, height);
-    cameraRef.current.aspect = width / height;
+    // Update orthographic camera frustum
+    const aspect = width / height;
+    const frustumSize = 2;
+    cameraRef.current.left = -frustumSize * aspect / 2;
+    cameraRef.current.right = frustumSize * aspect / 2;
+    cameraRef.current.top = frustumSize / 2;
+    cameraRef.current.bottom = -frustumSize / 2;
     cameraRef.current.updateProjectionMatrix();
     
     console.log(`✅ Canvas resized to: ${width}x${height}`);
