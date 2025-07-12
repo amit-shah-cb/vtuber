@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { createLocalVideoTrack, LocalVideoTrack } from "livekit-client";
 import useResizeObserver from "use-resize-observer";
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+import { useMobile } from "@/util/useMobile";
 import { 
   FACEMESH_LEFT_EYE, 
   FACEMESH_RIGHT_EYE, 
@@ -34,52 +35,39 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const faceMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
   const videoTrackRef = useRef<LocalVideoTrack | null>(null);
   const size = useResizeObserver({ ref: resizeRef });
+  const isMobile = useMobile();
   
   // Standard video configuration - always capture in 4:3 landscape
   const VIDEO_WIDTH = 1024;
   const VIDEO_HEIGHT = 768;
   const VIDEO_ASPECT = VIDEO_WIDTH / VIDEO_HEIGHT; // 4:3 aspect ratio
-  const PLANE_WIDTH = 1.5;
-  const PLANE_HEIGHT = 2; // 3:4 aspect ratio (portrait)
 
-  // Orientation state
-  const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
+  // Get plane dimensions based on device type
+  const getPlaneDimensions = useCallback(() => {
+    if (isMobile) {
+      return { width: 1.5, height: 2 }; // 3:4 aspect ratio (portrait for mobile)
+    } else {
+      return { width: 2, height: 1.5 }; // 4:3 aspect ratio (landscape for desktop)
+    }
+  }, [isMobile]);
 
   // Official MediaPipe face mesh indices for specific facial features
   const faceIndices = useRef<number[]>([]);
 
-  // Orientation detection
-  const detectOrientation = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    
-    // Use screen orientation API if available
-    if (screen.orientation) {
-      const angle = screen.orientation.angle;
-      const newOrientation = (angle === 0 || angle === 180) ? "portrait" : "landscape";
-      setOrientation(newOrientation);
-    } else {
-      // Fallback to window dimensions
-      const isPortrait = window.innerHeight > window.innerWidth;
-      setOrientation(isPortrait ? "portrait" : "landscape");
-    }
-  }, []);
-
-  // Adjust camera position based on orientation
-  const adjustCameraForOrientation = useCallback(() => {
+  // Adjust camera position based on device type
+  const adjustCameraForDevice = useCallback(() => {
     if (!cameraRef.current) return;
     
-    if (orientation === "portrait") {
-      // Move camera closer for portrait to show more of the face
+    if (isMobile) {
+      // Move camera closer for mobile to show more of the face
       cameraRef.current.position.z = 1.5;
-      cameraRef.current.fov = 50;
     } else {
-      // Move camera back for landscape to show full frame
+      // Move camera back for desktop to show full frame
       cameraRef.current.position.z = 2;
-      cameraRef.current.fov = 45;
     }
     
     cameraRef.current.updateProjectionMatrix();
-  }, [orientation]);
+  }, [isMobile]);
 
   // Initialize face indices with official MediaPipe facial feature data
   useEffect(() => {
@@ -145,13 +133,14 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (!faceGeometryRef.current || !faceMaterialRef.current || !landmarks || landmarks.length === 0) return;
     
     const vertices = faceGeometryRef.current.attributes.position.array as Float32Array;
+    const planeDimensions = getPlaneDimensions();
     
     landmarks.forEach((landmark, index) => {
       // Convert normalized coordinates to world space
       // Since mesh is rotated 180° around Y-axis, flip X coordinate to match movement direction
-      const x = (0.5 - landmark.x) * PLANE_WIDTH;   // Flip X back to match video movement direction
-      const y = (0.5 - landmark.y) * PLANE_HEIGHT;  // Flip Y to match video texture and scale
-      const z = landmark.z * 0.5 || 0;              // Scale Z depth
+      const x = (0.5 - landmark.x) * planeDimensions.width;   // Flip X back to match video movement direction
+      const y = (0.5 - landmark.y) * planeDimensions.height;  // Flip Y to match video texture and scale
+      const z = landmark.z * 0.5 || 0;                        // Scale Z depth
       
       vertices[index * 3] = x;
       vertices[index * 3 + 1] = y;
@@ -160,7 +149,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     
     // Mark attributes as needing update
     faceGeometryRef.current.attributes.position.needsUpdate = true;
-  }, []);
+  }, [getPlaneDimensions]);
 
   const createOrUpdateFaceMesh = useCallback((faceLandmarks: any[]) => {
     if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) return;
@@ -293,15 +282,18 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       }
     }
 
-    // Create plane geometry with standard 4:3 aspect ratio
-    const geometry = new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT);
+    // Get plane dimensions based on current orientation
+    const planeDimensions = getPlaneDimensions();
+    
+    // Create plane geometry with orientation-based aspect ratio
+    const geometry = new THREE.PlaneGeometry(planeDimensions.width, planeDimensions.height);
     const material = new THREE.MeshBasicMaterial({
       map: videoTextureRef.current,
     });
     
     planeRef.current = new THREE.Mesh(geometry, material);
     sceneRef.current.add(planeRef.current);
-  }, [size.height, size.width]);
+  }, [size.height, size.width, getPlaneDimensions]);
 
   const setupThreeJS = useCallback(() => {
     if (!canvasRef.current) return;
@@ -330,8 +322,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     );
     cameraRef.current.position.z = 2;
     
-    // Apply orientation-based camera adjustments
-    adjustCameraForOrientation();
+    // Apply device-based camera adjustments
+    adjustCameraForDevice();
 
     // Create orbit controls
     controlsRef.current = new OrbitControls(cameraRef.current, canvasRef.current);
@@ -358,7 +350,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       // Create the video plane
       updateVideoPlane();
     }
-  }, [size.height, size.width, updateVideoPlane, adjustCameraForOrientation]);
+  }, [size.height, size.width, updateVideoPlane, adjustCameraForDevice]);
 
   // Create video track with standard resolution
   const createVideoTrack = useCallback(async () => {
@@ -432,42 +424,17 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     }
   }, [updateVideoPlane]);
 
-  // Orientation detection and handling
+  // Adjust camera when device type changes
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    
-    // Initial orientation detection
-    detectOrientation();
-    
-    // Listen for orientation changes
-    const handleOrientationChange = () => {
-      setTimeout(() => {
-        detectOrientation();
-      }, 100); // Small delay to ensure screen dimensions are updated
-    };
-    
-    // Listen for various orientation change events
-    window.addEventListener('orientationchange', handleOrientationChange);
-    window.addEventListener('resize', handleOrientationChange);
-    
-    // Listen for screen orientation API if available
-    if (screen.orientation) {
-      screen.orientation.addEventListener('change', handleOrientationChange);
-    }
-    
-    return () => {
-      window.removeEventListener('orientationchange', handleOrientationChange);
-      window.removeEventListener('resize', handleOrientationChange);
-      if (screen.orientation) {
-        screen.orientation.removeEventListener('change', handleOrientationChange);
-      }
-    };
-  }, [detectOrientation]);
+    adjustCameraForDevice();
+  }, [isMobile, adjustCameraForDevice]);
 
-  // Adjust camera when orientation changes
+  // Update plane when device type changes
   useEffect(() => {
-    adjustCameraForOrientation();
-  }, [orientation, adjustCameraForOrientation]);
+    if (sceneRef.current && videoTextureRef.current) {
+      updateVideoPlane();
+    }
+  }, [isMobile, updateVideoPlane]);
 
   // Cleanup video track on unmount
   useEffect(() => {
