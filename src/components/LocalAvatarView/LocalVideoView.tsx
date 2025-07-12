@@ -357,11 +357,11 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   const createOrUpdateFaceBoundingBox = useCallback((faceLandmarks: any[]) => {
     if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) {
-      console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
+      // console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
       return;
     }
     
-    console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
+    // console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
     
     const landmarks = faceLandmarks[0];
     
@@ -392,7 +392,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     const centerY = (minY + maxY) / 2;
     const centerZ = (minZ + maxZ) / 2;
     
-    console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
+    // console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
     
     // Create or update bounding box plane
     if (!faceBoundingBoxRef.current) {
@@ -429,13 +429,13 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       
       faceBoundingBoxRef.current = new THREE.LineSegments(outlineGeometry, outlineMaterial);
       sceneRef.current.add(faceBoundingBoxRef.current);
-      console.log('Face bounding box outline created and added to scene');
+      // console.log('Face bounding box outline created and added to scene');
     }
     
     // Update bounding box size and position
     faceBoundingBoxRef.current.scale.set(width, height, 1);
     faceBoundingBoxRef.current.position.set(centerX, centerY, 0.1);
-    console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
+    // console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
     
     // Create or update normal vector
     // if (!faceNormalVectorRef.current) {
