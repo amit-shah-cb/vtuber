@@ -37,6 +37,14 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const faceBoundingBoxRef = useRef<THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> | null>(null);
   // Add a ref to store the shape for reuse
   const faceBoundingBoxShapeRef = useRef<THREE.Shape | null>(null);
+  const faceBoundingBoxGeometryRef = useRef<THREE.ShapeGeometry | null>(null);
+  const faceBoundingBoxMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  // Add refs for reusable vectors
+  const boundingBoxCornersRef = useRef([
+    new THREE.Vector2(), new THREE.Vector2(), new THREE.Vector2(), new THREE.Vector2()
+  ]);
+  const boundingBoxCenterRef = useRef(new THREE.Vector3());
+  const boundingBoxCamToBoxRef = useRef(new THREE.Vector3());
   const videoTrackRef = useRef<LocalVideoTrack | null>(null);
   const size = useResizeObserver({ ref: resizeRef });
   const isMobile = useMobile();
@@ -398,62 +406,45 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     // Create or update the shape in the XY plane at z=0 (we'll position and scale it later)
     const halfWidth = width / 2;
     const halfHeight = height / 2;
-    const corners = [
-      new THREE.Vector2(-halfWidth, -halfHeight), // Bottom left
-      new THREE.Vector2(halfWidth, -halfHeight),  // Bottom right
-      new THREE.Vector2(halfWidth, halfHeight),   // Top right
-      new THREE.Vector2(-halfWidth, halfHeight),  // Top left
-    ];
+    // Reuse Vector2s for corners
+    const corners = boundingBoxCornersRef.current;
+    corners[0].set(-halfWidth, -halfHeight); // Bottom left
+    corners[1].set(halfWidth, -halfHeight);  // Bottom right
+    corners[2].set(halfWidth, halfHeight);   // Top right
+    corners[3].set(-halfWidth, halfHeight);  // Top left
 
-    // Reuse the shape if possible
-    let shape: THREE.Shape;
+    // Only create the shape, geometry, material, and mesh once
     if (!faceBoundingBoxShapeRef.current) {
-      shape = new THREE.Shape(corners);
-      faceBoundingBoxShapeRef.current = shape;
-    } else {
-      shape = faceBoundingBoxShapeRef.current;
-      // Update the shape's points (move the shape)
-      shape.getPoints().forEach((pt, i) => {
-        if (corners[i]) {
-          pt.x = corners[i].x;
-          pt.y = corners[i].y;
-        }
+      faceBoundingBoxShapeRef.current = new THREE.Shape(corners);
+      faceBoundingBoxGeometryRef.current = new THREE.ShapeGeometry(faceBoundingBoxShapeRef.current);
+      faceBoundingBoxMaterialRef.current = new THREE.MeshBasicMaterial({
+        color: 0x00ffff,
+        transparent: true,
+        opacity: 0.3,
+        side: THREE.DoubleSide,
       });
-      // Remove any extra points if the number of corners changes (shouldn't happen here)
-    }
-
-    // Always recreate geometry from the updated shape (ShapeGeometry is not mutable)
-    const shapeGeometry = new THREE.ShapeGeometry(shape);
-    const shapeMaterial = new THREE.MeshBasicMaterial({
-      color: 0x00ffff,
-      transparent: true,
-      opacity: 0.3,
-      side: THREE.DoubleSide,
-    });
-
-    // Compute scale factor based on distance from camera to centerZ
-    let scale = 1;
-    if (cameraRef.current) {
-      const camera = cameraRef.current;
-      // Distance from camera to bounding box center
-      const camToBox = new THREE.Vector3(centerX, centerY, centerZ).distanceTo(camera.position);
-      // Reference distance (e.g., camera at z=2, box at z=0)
-      const referenceDistance = Math.abs(camera.position.z);
-      // Scale so that the shape appears the same size as if it were at z=0
-      scale = camToBox / referenceDistance;
-    }
-
-    if (!faceBoundingBoxRef.current) {
-      faceBoundingBoxRef.current = new THREE.Mesh(shapeGeometry, shapeMaterial);
+      faceBoundingBoxRef.current = new THREE.Mesh(faceBoundingBoxGeometryRef.current, faceBoundingBoxMaterialRef.current);
       sceneRef.current.add(faceBoundingBoxRef.current);
-    } else {
-      faceBoundingBoxRef.current.geometry.dispose();
-      faceBoundingBoxRef.current.geometry = shapeGeometry;
-      faceBoundingBoxRef.current.material = shapeMaterial;
     }
-    // Position at the center and z depth, and apply scale
-    faceBoundingBoxRef.current.position.set(centerX, centerY, centerZ);
-    faceBoundingBoxRef.current.scale.set(scale, scale, 1);
+    // On every update, just move and scale the mesh
+    if (faceBoundingBoxRef.current) {
+      // Reuse Vector3 for center
+      const center = boundingBoxCenterRef.current;
+      center.set(centerX, centerY, centerZ);
+      faceBoundingBoxRef.current.position.copy(center);
+      // Compute scale factor based on distance from camera to centerZ
+      let scale = 1;
+      if (cameraRef.current) {
+        const camera = cameraRef.current;
+        // Reuse Vector3 for camToBox
+        const camToBox = boundingBoxCamToBoxRef.current;
+        camToBox.copy(center);
+        const camDistance = camToBox.distanceTo(camera.position);
+        const referenceDistance = Math.abs(camera.position.z);
+        scale = referenceDistance / camDistance;
+      }
+      faceBoundingBoxRef.current.scale.set(scale, scale, 1);
+    }
     
     // console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
     
@@ -488,7 +479,9 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       sceneRef.current.remove(faceBoundingBoxRef.current);
       faceBoundingBoxRef.current = null;
     }
-    
+    faceBoundingBoxShapeRef.current = null;
+    faceBoundingBoxGeometryRef.current = null;
+    faceBoundingBoxMaterialRef.current = null;
   }, []);
 
   const setupThreeJS = useCallback(() => {
