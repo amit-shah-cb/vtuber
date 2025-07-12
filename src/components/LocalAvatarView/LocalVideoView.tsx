@@ -402,16 +402,23 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     
     if (containerAspect > VIDEO_ASPECT) {
       // Container is wider than video aspect - fit to height
-      canvasHeight = size.height;
+      canvasHeight = Math.min(size.height, size.width / VIDEO_ASPECT);
       canvasWidth = canvasHeight * VIDEO_ASPECT;
     } else {
       // Container is taller than video aspect - fit to width
-      canvasWidth = size.width;
+      canvasWidth = Math.min(size.width, size.height * VIDEO_ASPECT);
       canvasHeight = canvasWidth / VIDEO_ASPECT;
     }
     
+    // Ensure canvas doesn't exceed container bounds
+    canvasWidth = Math.min(canvasWidth, size.width);
+    canvasHeight = Math.min(canvasHeight, size.height);
+    
     canvasRef.current.width = canvasWidth;
     canvasRef.current.height = canvasHeight;
+    canvasRef.current.style.width = `${canvasWidth}px`;
+    canvasRef.current.style.height = `${canvasHeight}px`;
+    
     rendererRef.current?.setSize(canvasWidth, canvasHeight);
     cameraRef.current.aspect = canvasWidth / canvasHeight;
     cameraRef.current.updateProjectionMatrix();
@@ -481,12 +488,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, []);
 
   return (
-    <div className="relative h-full w-full flex items-center justify-center bg-black" ref={resizeRef}>
-      <div className="relative">
+    <div className="relative h-full w-full flex items-center justify-center bg-black overflow-hidden" ref={resizeRef}>
+      <div className="relative flex-shrink-0">
         <canvas
-          width={size.width}
-          height={size.height}
-          className="max-h-full max-w-full object-contain"
+          className="block"
           ref={canvasRef}
         />
       </div>
