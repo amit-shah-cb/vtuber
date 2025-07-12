@@ -314,7 +314,12 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     // Create renderer
     rendererRef.current = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
+      antialias: true,
+      alpha: false,
     });
+    
+    // Set pixel ratio for crisp rendering on high-DPI displays
+    rendererRef.current.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     
     // Create camera
     cameraRef.current = new THREE.PerspectiveCamera(
@@ -347,6 +352,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
       videoTextureRef.current.minFilter = THREE.LinearFilter;
       videoTextureRef.current.magFilter = THREE.LinearFilter;
+      videoTextureRef.current.format = THREE.RGBAFormat;
+      videoTextureRef.current.generateMipmaps = false;
       
       // Create the video plane
       updateVideoPlane();
@@ -374,13 +381,18 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       videoTrackRef.current = track;
       track.attach(videoRef.current!);
       
-      // Start animation loop after video is attached
-      animate.current();
-      
-      // Setup FaceLandmarker after video is ready
-      setTimeout(() => {
-        setupFaceMesh();
-      }, 2000);
+      // Wait for video to be ready before starting
+      videoRef.current!.onloadedmetadata = () => {
+        console.log(`Video loaded: ${videoRef.current!.videoWidth}x${videoRef.current!.videoHeight}`);
+        
+        // Start animation loop after video is loaded
+        animate.current();
+        
+        // Setup FaceLandmarker after video is ready
+        setTimeout(() => {
+          setupFaceMesh();
+        }, 1000);
+      };
     } catch (error) {
       console.error("Error creating video track:", error);
     }
@@ -395,16 +407,12 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (!cameraRef.current) return;
     if (!size.width || !size.height) return;
     
-    // Always use a fixed canvas resolution that maintains 4:3 aspect ratio
-    // Let CSS handle the display sizing
-    const canvasWidth = 800;  // Fixed width
-    const canvasHeight = 600; // Fixed height (4:3 ratio)
+    // Set canvas to fill the entire container
+    canvasRef.current.width = size.width;
+    canvasRef.current.height = size.height;
     
-    canvasRef.current.width = canvasWidth;
-    canvasRef.current.height = canvasHeight;
-    
-    rendererRef.current?.setSize(canvasWidth, canvasHeight);
-    cameraRef.current.aspect = canvasWidth / canvasHeight;
+    rendererRef.current?.setSize(size.width, size.height);
+    cameraRef.current.aspect = size.width / size.height;
     cameraRef.current.updateProjectionMatrix();
   }, [size, size.height, size.width]);
 
@@ -472,14 +480,19 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, []);
 
   return (
-    <div className="relative h-full w-full flex items-center justify-center bg-black" ref={resizeRef}>
+    <div className="relative h-full w-full bg-black" ref={resizeRef}>
       <canvas
-        className="max-h-full max-w-full object-contain"
-        style={{ aspectRatio: '4/3' }}
+        className="w-full h-full"
         ref={canvasRef}
       />
       <div className="absolute w-[0px] h-[0px] bottom-2 right-2 overflow-hidden">
-        <video className="h-full w-full" ref={videoRef} />
+        <video 
+          className="h-full w-full" 
+          ref={videoRef}
+          width={VIDEO_WIDTH}
+          height={VIDEO_HEIGHT}
+          style={{ objectFit: 'cover' }}
+        />
       </div>
     </div>
   );
