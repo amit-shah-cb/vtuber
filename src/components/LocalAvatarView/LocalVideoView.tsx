@@ -372,7 +372,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       });
 
       // Create plane geometry with high subdivision for smooth deformation
-      const geometry = new THREE.PlaneGeometry(2, 1.5, 128, 96);
+      const geometry = new THREE.PlaneGeometry(1.5, 2, 128, 96);
       
       planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current);
       sceneRef.current.add(planeRef.current);
