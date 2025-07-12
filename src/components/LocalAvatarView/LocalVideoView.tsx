@@ -37,17 +37,18 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const size = useResizeObserver({ ref: resizeRef });
   const isMobile = useMobile();
   
-  // Get video resolution based on device type
+  // Get video resolution based on device type - Facebook Live 720p streaming specs
   const getVideoResolution = useCallback(() => {
     if (isMobile) {
-      return { width: 768, height: 1024 }; // 3:4 aspect ratio (portrait for mobile)
+      return { width: 540, height: 720 }; // 3:4 aspect ratio (portrait for mobile) - 720p height
     } else {
-      return { width: 1024, height: 768 }; // 4:3 aspect ratio (landscape for desktop)
+      return { width: 960, height: 720 }; // 4:3 aspect ratio (landscape for desktop) - 720p height
     }
   }, [isMobile]);
 
   // Update plane aspect ratio based on actual video metadata
   const updatePlaneAspect = useCallback(() => {
+    console.log('🔄 CALLBACK: updatePlaneAspect called');
     if (!videoRef.current || !sceneRef.current || !videoTextureRef.current) return;
     
     const videoWidth = videoRef.current.videoWidth;
@@ -139,6 +140,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   // Adjust camera position based on device type
   const adjustCameraForDevice = useCallback(() => {
+    console.log('🔄 CALLBACK: adjustCameraForDevice called', {isMobile});
     if (!cameraRef.current) return;
     
     if (isMobile) {
@@ -154,6 +156,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   // Initialize face indices with official MediaPipe facial feature data
   useEffect(() => {
+    console.log('🎯 EFFECT [1/9]: Face indices initialization (no deps)');
     const indices: number[] = [];
     
     // Combine all facial feature edges into one array
@@ -352,6 +355,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
 
   const setupThreeJS = useCallback(() => {
+    console.log('🔄 CALLBACK: setupThreeJS called');
     if (!canvasRef.current) return;
     if (sceneRef.current) return; // Already setup
 
@@ -401,6 +405,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   // Create video track with device-appropriate resolution
   const createVideoTrack = useCallback(async () => {
+    console.log('🔄 CALLBACK: createVideoTrack called');
     // Stop existing track if it exists
     if (videoTrackRef.current) {
       videoTrackRef.current.stop();
@@ -477,6 +482,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, [setupFaceMesh, updatePlaneAspect, getVideoResolution]);
 
   useEffect(() => {  
+    console.log('🎯 EFFECT [2/9]: Video track creation [createVideoTrack]');
     createVideoTrack();
     
     // Prevent video track recreation on orientation changes
@@ -495,6 +501,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, [createVideoTrack]);
 
   useEffect(() => {
+    console.log('🎯 EFFECT [3/9]: Canvas resizing [size, size.height, size.width]', {size: size.width + 'x' + size.height});
     if (!canvasRef.current) return;
     if (!cameraRef.current) return;
     if (!rendererRef.current) return;
@@ -517,6 +524,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, [size, size.height, size.width]);
 
   useEffect(() => {
+    console.log('🎯 EFFECT [4/9]: Canvas stream setup [onCanvasStreamChanged]');
     if (!canvasRef.current) return;
     if (canvasStreamRef.current) return;
     canvasStreamRef.current = canvasRef.current.captureStream(60);
@@ -525,21 +533,27 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   // Initialize Three.js as soon as canvas is available
   useEffect(() => {
+    console.log('🎯 EFFECT [5/9]: Early Three.js initialization [setupThreeJS]');
     if (canvasRef.current && !sceneRef.current) {
       console.log(`🎬 Canvas ready, initializing Three.js...`);
       setupThreeJS();
     }
   }, [setupThreeJS]);
 
-  useEffect(setupThreeJS, [setupThreeJS]);
+  useEffect(() => {
+    console.log('🎯 EFFECT [6/9]: Three.js setup [setupThreeJS]');
+    setupThreeJS();
+  }, [setupThreeJS]);
 
   // Adjust camera when device type changes
   useEffect(() => {
+    console.log('🎯 EFFECT [7/9]: Camera adjustment [isMobile, adjustCameraForDevice]', {isMobile});
     adjustCameraForDevice();
   }, [isMobile, adjustCameraForDevice]);
 
   // Update plane aspect when device type changes (rare edge case)
   useEffect(() => {
+    console.log('🎯 EFFECT [8/9]: Plane aspect update [isMobile, updatePlaneAspect]', {isMobile});
     if (sceneRef.current && videoTextureRef.current && videoRef.current) {
       updatePlaneAspect();
     }
@@ -547,7 +561,9 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   // Cleanup video track and event listeners on unmount
   useEffect(() => {
+    console.log('🎯 EFFECT [9/9]: Cleanup setup [updatePlaneAspect]');
     return () => {
+      console.log('🧹 CLEANUP: Cleaning up video track and event listeners');
       if (videoTrackRef.current) {
         videoTrackRef.current.stop();
         videoTrackRef.current = null;
@@ -559,8 +575,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         video.removeEventListener('loadedmetadata', updatePlaneAspect);
         video.removeEventListener('resize', updatePlaneAspect);
       }
-      window.removeEventListener('resize', updatePlaneAspect);
-      window.removeEventListener('orientationchange', updatePlaneAspect);
+      
     };
   }, [updatePlaneAspect]);
 
