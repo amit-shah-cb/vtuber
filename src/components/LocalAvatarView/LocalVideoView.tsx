@@ -99,15 +99,21 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   const updateFaceMesh = useCallback((landmarks: any[]) => {
     if (!faceGeometryRef.current || !faceMaterialRef.current || !landmarks || landmarks.length === 0) return;
+    if (!planeRef.current) return;
     
     const vertices = faceGeometryRef.current.attributes.position.array as Float32Array;
     
+    // Get the current plane dimensions
+    const planeGeometry = planeRef.current.geometry as THREE.PlaneGeometry;
+    const planeWidth = planeGeometry.parameters.width;
+    const planeHeight = planeGeometry.parameters.height;
+    
     landmarks.forEach((landmark, index) => {
-      // Convert normalized coordinates to world space
+      // Convert normalized coordinates to world space using actual plane dimensions
       // Since mesh is rotated 180° around Y-axis, flip X coordinate to match movement direction
-      const x = (0.5 - landmark.x) * 2;        // Flip X back to match video movement direction
-      const y = (0.5 - landmark.y) * 1.5;      // Flip Y to match video texture and scale
-      const z = landmark.z * 0.5 || 0;         // Scale Z depth
+      const x = (0.5 - landmark.x) * planeWidth;        // Flip X back to match video movement direction
+      const y = (0.5 - landmark.y) * planeHeight;       // Flip Y to match video texture and scale
+      const z = landmark.z * 0.5 || 0;                  // Scale Z depth
       
       vertices[index * 3] = x;
       vertices[index * 3 + 1] = y;
@@ -233,6 +239,48 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     }
   }, [createOrUpdateFaceMesh, removeFaceMesh]);
 
+  const updateVideoPlane = useCallback(() => {
+    if (!sceneRef.current || !videoRef.current || !videoTextureRef.current || !size.width || !size.height) return;
+
+    // Remove existing plane if it exists
+    if (planeRef.current) {
+      sceneRef.current.remove(planeRef.current);
+      planeRef.current.geometry.dispose();
+      
+      // Handle both single material and material array
+      if (Array.isArray(planeRef.current.material)) {
+        planeRef.current.material.forEach(material => material.dispose());
+      } else {
+        planeRef.current.material.dispose();
+      }
+    }
+
+    // Calculate plane dimensions to maintain video aspect ratio
+    const videoAspect = 1024 / 768; // 4:3 aspect ratio from camera
+    const canvasAspect = size.width / size.height;
+    
+    let planeWidth, planeHeight;
+    
+    if (canvasAspect > videoAspect) {
+      // Canvas is wider than video - fit to height
+      planeHeight = 2;
+      planeWidth = planeHeight * videoAspect;
+    } else {
+      // Canvas is taller than video - fit to width
+      planeWidth = 2;
+      planeHeight = planeWidth / videoAspect;
+    }
+    
+    // Create plane geometry to display video with correct aspect ratio
+    const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+    const material = new THREE.MeshBasicMaterial({
+      map: videoTextureRef.current,
+    });
+    
+    planeRef.current = new THREE.Mesh(geometry, material);
+    sceneRef.current.add(planeRef.current);
+  }, [size.height, size.width]);
+
   const setupThreeJS = useCallback(() => {
     if (!canvasRef.current) return;
     if (sceneRef.current) return; // Already setup
@@ -267,24 +315,18 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     const light = new THREE.AmbientLight(0xffffff, 1);
     sceneRef.current.add(light);
 
-    // Create video texture and plane when video is ready
+    // Create video texture when video is ready
     if (videoRef.current) {
       videoTextureRef.current = new THREE.VideoTexture(videoRef.current);
       videoTextureRef.current.flipY = true;
       videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
       videoTextureRef.current.minFilter = THREE.LinearFilter;
       videoTextureRef.current.magFilter = THREE.LinearFilter;
-
-      // Create plane geometry to display video
-      const geometry = new THREE.PlaneGeometry(2, 1.5);
-      const material = new THREE.MeshBasicMaterial({
-        map: videoTextureRef.current,
-      });
       
-      planeRef.current = new THREE.Mesh(geometry, material);
-      sceneRef.current.add(planeRef.current);
+      // Create the video plane
+      updateVideoPlane();
     }
-  }, [size.height, size.width]);
+  }, [size.height, size.width, updateVideoPlane]);
 
   useEffect(() => {  
     createLocalVideoTrack({
@@ -326,6 +368,13 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, [onCanvasStreamChanged]);
 
   useEffect(setupThreeJS, [setupThreeJS]);
+
+  // Update video plane when size changes
+  useEffect(() => {
+    if (sceneRef.current && videoTextureRef.current) {
+      updateVideoPlane();
+    }
+  }, [updateVideoPlane]);
 
   return (
     <div className="relative h-full w-full">
