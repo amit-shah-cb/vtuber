@@ -183,18 +183,124 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     console.log(`Face oval: ${FACEMESH_FACE_OVAL.length}, Eyes: ${FACEMESH_LEFT_EYE.length + FACEMESH_RIGHT_EYE.length}, Lips: ${FACEMESH_LIPS.length}, Eyebrows: ${FACEMESH_LEFT_EYEBROW.length + FACEMESH_RIGHT_EYEBROW.length}`);
   }, []);
 
-  const animate = useRef(() => {
-    requestAnimationFrame(animate.current);
-    // Update video texture if available
-    if (videoTextureRef.current) {
-      videoTextureRef.current.needsUpdate = true;
+  const createOrUpdateFaceBoundingBox = useCallback((faceLandmarks: any[]) => {
+    if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) {
+      // console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
+      return;
     }
-    // Update orbit controls
-    if (controlsRef.current) {
-      controlsRef.current.update();
+    
+    // console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
+    
+    const landmarks = faceLandmarks[0];
+    
+    // Calculate bounding box from face landmarks
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    
+    landmarks.forEach((landmark: any) => {
+      // Convert normalized coordinates to world space (same as face mesh)
+      const x = (landmark.x - 0.5) * 2;        // Convert to -1 to +1 range (NOT flipped)
+      const y = (0.5 - landmark.y) * 1.5;      // Flip Y and convert to -0.75 to +0.75 range
+      const z = landmark.z * 0.5 || 0;         // Scale Z depth
+      
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    });
+    
+    // Calculate bounding box dimensions and center
+    const width = maxX - minX;
+    const height = maxY - minY;
+   
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+ // On every update, just move and scale the mesh
+ if (faceBoundingBoxRef.current) {
+    faceBoundingBoxRef.current.position.set(centerX, centerY, centerZ);      
+    faceBoundingBoxRef.current.scale.set(width, height, 1);
+  }else{
+        // Create or update the shape in the XY plane at z=0 (we'll position and scale it later)
+     
+      // Reuse Vector2s for corners
+      const corners = boundingBoxCornersRef.current;
+      corners[0].set(-width/2, -height/2); // Bottom left
+      corners[1].set(width/2, -height/2);  // Bottom right
+      corners[2].set(width/2, height/2);   // Top right
+      corners[3].set(-width/2, height/2);  // Top left
+      faceBoundingBoxShapeRef.current = new THREE.Shape(corners);
+      faceBoundingBoxGeometryRef.current = new THREE.ShapeGeometry(faceBoundingBoxShapeRef.current);
+      faceBoundingBoxMaterialRef.current = new THREE.MeshBasicMaterial({
+        color: 0x00ffff,
+        transparent: true,
+        opacity: 0.3,
+        side: THREE.DoubleSide,
+      });
+      faceBoundingBoxRef.current = new THREE.Mesh(faceBoundingBoxGeometryRef.current, faceBoundingBoxMaterialRef.current);
+      sceneRef.current.add(faceBoundingBoxRef.current);
     }
-    rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
-  });
+   
+    
+   
+  }, []);
+
+  const removeFaceBoundingBox = useCallback(() => {
+    if (faceBoundingBoxRef.current && sceneRef.current) {
+      sceneRef.current.remove(faceBoundingBoxRef.current);
+      faceBoundingBoxRef.current = null;
+    }
+    faceBoundingBoxShapeRef.current = null;
+    faceBoundingBoxGeometryRef.current = null;
+    faceBoundingBoxMaterialRef.current = null;
+  }, []);
+
+  // Add a ref to track the last face detection time
+  const lastFaceDetectionTimeRef = useRef(0);
+  const FACE_DETECTION_INTERVAL = 1000 / 15; // 15 FPS for face detection
+
+  // Remove the animate ref and use a single animation loop
+  useEffect(() => {
+    let animationFrameId: number;
+    let running = true;
+
+    function animationLoop() {
+      if (!running) return;
+      // Render scene
+      if (rendererRef.current && sceneRef.current && cameraRef.current) {
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+      }
+      // Throttle face detection
+      const now = performance.now();
+      if (
+        faceLandmarkerRef.current &&
+        videoRef.current &&
+        videoRef.current.videoWidth > 0 &&
+        now - lastFaceDetectionTimeRef.current > FACE_DETECTION_INTERVAL
+      ) {
+        try {
+          const results = faceLandmarkerRef.current.detectForVideo(videoRef.current, now);
+          if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+            createOrUpdateFaceBoundingBox(results.faceLandmarks);
+          } else {
+            removeFaceBoundingBox();
+          }
+        } catch (detectionError) {
+          // Optionally log or handle error
+        }
+        lastFaceDetectionTimeRef.current = now;
+      }
+      animationFrameId = requestAnimationFrame(animationLoop);
+    }
+    animationLoop();
+    return () => {
+      running = false;
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    };
+  }, [createOrUpdateFaceBoundingBox, removeFaceBoundingBox]);
 
   const initializeFaceMesh = useCallback(() => {
     if (faceGeometryRef.current && faceMaterialRef.current) return; // Already initialized
@@ -358,81 +464,6 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   }, [createOrUpdateFaceMesh, removeFaceMesh]);
 
 
-  const createOrUpdateFaceBoundingBox = useCallback((faceLandmarks: any[]) => {
-    if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) {
-      // console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
-      return;
-    }
-    
-    // console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
-    
-    const landmarks = faceLandmarks[0];
-    
-    // Calculate bounding box from face landmarks
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-    
-    landmarks.forEach((landmark: any) => {
-      // Convert normalized coordinates to world space (same as face mesh)
-      const x = (landmark.x - 0.5) * 2;        // Convert to -1 to +1 range (NOT flipped)
-      const y = (0.5 - landmark.y) * 1.5;      // Flip Y and convert to -0.75 to +0.75 range
-      const z = landmark.z * 0.5 || 0;         // Scale Z depth
-      
-      minX = Math.min(minX, x);
-      maxX = Math.max(maxX, x);
-      minY = Math.min(minY, y);
-      maxY = Math.max(maxY, y);
-      minZ = Math.min(minZ, z);
-      maxZ = Math.max(maxZ, z);
-    });
-    
-    // Calculate bounding box dimensions and center
-    const width = maxX - minX;
-    const height = maxY - minY;
-   
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-    const centerZ = (minZ + maxZ) / 2;
- // On every update, just move and scale the mesh
- if (faceBoundingBoxRef.current) {
-    faceBoundingBoxRef.current.position.set(centerX, centerY, centerZ);      
-    faceBoundingBoxRef.current.scale.set(width, height, 1);
-  }else{
-        // Create or update the shape in the XY plane at z=0 (we'll position and scale it later)
-     
-      // Reuse Vector2s for corners
-      const corners = boundingBoxCornersRef.current;
-      corners[0].set(-width, -height); // Bottom left
-      corners[1].set(width, -height);  // Bottom right
-      corners[2].set(width, height);   // Top right
-      corners[3].set(-width, height);  // Top left
-      faceBoundingBoxShapeRef.current = new THREE.Shape(corners);
-      faceBoundingBoxGeometryRef.current = new THREE.ShapeGeometry(faceBoundingBoxShapeRef.current);
-      faceBoundingBoxMaterialRef.current = new THREE.MeshBasicMaterial({
-        color: 0x00ffff,
-        transparent: true,
-        opacity: 0.3,
-        side: THREE.DoubleSide,
-      });
-      faceBoundingBoxRef.current = new THREE.Mesh(faceBoundingBoxGeometryRef.current, faceBoundingBoxMaterialRef.current);
-      sceneRef.current.add(faceBoundingBoxRef.current);
-    }
-   
-    
-   
-  }, []);
-
-  const removeFaceBoundingBox = useCallback(() => {
-    if (faceBoundingBoxRef.current && sceneRef.current) {
-      sceneRef.current.remove(faceBoundingBoxRef.current);
-      faceBoundingBoxRef.current = null;
-    }
-    faceBoundingBoxShapeRef.current = null;
-    faceBoundingBoxGeometryRef.current = null;
-    faceBoundingBoxMaterialRef.current = null;
-  }, []);
-
   const setupThreeJS = useCallback(() => {
     console.log('🔄 CALLBACK: setupThreeJS called');
     if (!canvasRef.current) return;
@@ -537,7 +568,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         updatePlaneAspect();
         
         // Start animation loop after video and texture are ready
-        animate.current();
+        // animate.current(); // This line is removed as per the edit hint
         
         // Setup FaceLandmarker after video is ready
         setTimeout(() => {
