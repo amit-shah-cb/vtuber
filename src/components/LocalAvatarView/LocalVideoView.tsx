@@ -82,7 +82,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const faceGeometryRef = useRef<THREE.BufferGeometry | null>(null);
   const faceMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
   const lipShaderRef = useRef<THREE.ShaderMaterial | null>(null);
-  const faceBoundingBoxRef = useRef<THREE.LineSegments | null>(null);
+  // Change the ref type to allow THREE.Group for the bounding box
+  const faceBoundingBoxRef = useRef<THREE.Group | null>(null);
   const faceNormalVectorRef = useRef<THREE.ArrowHelper | null>(null);
   const [showFaceBoundingBox, setShowFaceBoundingBox] = useState(false);
   const size = useResizeObserver({ ref: resizeRef });
@@ -549,46 +550,41 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     
     // Create or update bounding box plane
     if (!faceBoundingBoxRef.current) {
-      console.log('Creating new face bounding box outline');
+      console.log('Creating new face bounding box with ShapeGeometry (fill only)');
       
-      // Create outline geometry using line segments
-      const outlineGeometry = new THREE.BufferGeometry();
-      
-      // Define the vertices for a rectangle outline
-      const vertices = new Float32Array([
-        -0.5, -0.5, 0,  // Bottom left
-         0.5, -0.5, 0,  // Bottom right
-         0.5,  0.5, 0,  // Top right
-        -0.5,  0.5, 0   // Top left
-      ]);
-      
-      // Define indices to connect the vertices into a rectangle outline
-      const indices = [
-        0, 1,  // Bottom edge
-        1, 2,  // Right edge
-        2, 3,  // Top edge
-        3, 0   // Left edge
-      ];
-      
-      outlineGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-      outlineGeometry.setIndex(indices);
-      
-      const outlineMaterial = new THREE.LineBasicMaterial({
+      // Create a rectangle shape
+      const shape = new THREE.Shape();
+      shape.moveTo(-0.5, -0.5);
+      shape.lineTo(0.5, -0.5);
+      shape.lineTo(0.5, 0.5);
+      shape.lineTo(-0.5, 0.5);
+      shape.lineTo(-0.5, -0.5); // Close the shape
+
+      // Create filled geometry and mesh
+      const shapeGeometry = new THREE.ShapeGeometry(shape);
+      const fillMaterial = new THREE.MeshBasicMaterial({
         color: 0x00ffff,
-        linewidth: 2,
         transparent: true,
-        opacity: 0.8
+        opacity: 0.15,
+        side: THREE.DoubleSide
       });
-      
-      faceBoundingBoxRef.current = new THREE.LineSegments(outlineGeometry, outlineMaterial);
+      const fillMesh = new THREE.Mesh(shapeGeometry, fillMaterial);
+
+      // Use only the fill mesh (no outline)
+      const group = new THREE.Group();
+      group.add(fillMesh);
+
+      faceBoundingBoxRef.current = group;
       sceneRef.current.add(faceBoundingBoxRef.current);
-      console.log('Face bounding box outline created and added to scene');
+      console.log('Face bounding box group (fill only) created and added to scene');
     }
     
     // Update bounding box size and position
-    faceBoundingBoxRef.current.scale.set(width, height, 1);
-    faceBoundingBoxRef.current.position.set(centerX, centerY, 0.1);
-    console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
+    if (faceBoundingBoxRef.current) {
+      faceBoundingBoxRef.current.scale.set(width, height, 1);
+      faceBoundingBoxRef.current.position.set(centerX, centerY, 0.1);
+      console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
+    }
     
     // Create or update normal vector
     // if (!faceNormalVectorRef.current) {
