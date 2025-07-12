@@ -33,7 +33,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const faceMeshRef = useRef<THREE.LineSegments | null>(null);
   const faceGeometryRef = useRef<THREE.BufferGeometry | null>(null);
   const faceMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
-  const faceBoundingBoxRef = useRef<THREE.LineSegments | null>(null);
+  // Change the ref type to Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> | null
+  const faceBoundingBoxRef = useRef<THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> | null>(null);
+  // Add a ref to store the shape for reuse
+  const faceBoundingBoxShapeRef = useRef<THREE.Shape | null>(null);
   const videoTrackRef = useRef<LocalVideoTrack | null>(null);
   const size = useResizeObserver({ ref: resizeRef });
   const isMobile = useMobile();
@@ -391,50 +394,67 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
     const centerZ = (minZ + maxZ) / 2;
-    
-    // console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
-    
-    // Create or update bounding box plane
-    if (!faceBoundingBoxRef.current) {
-      console.log('Creating new face bounding box outline');
-      
-      // Create outline geometry using line segments
-      const outlineGeometry = new THREE.BufferGeometry();
-      
-      // Define the vertices for a rectangle outline
-      const vertices = new Float32Array([
-        -0.5, -0.5, 0,  // Bottom left
-         0.5, -0.5, 0,  // Bottom right
-         0.5,  0.5, 0,  // Top right
-        -0.5,  0.5, 0   // Top left
-      ]);
-      
-      // Define indices to connect the vertices into a rectangle outline
-      const indices = [
-        0, 1,  // Bottom edge
-        1, 2,  // Right edge
-        2, 3,  // Top edge
-        3, 0   // Left edge
-      ];
-      
-      outlineGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-      outlineGeometry.setIndex(indices);
-      
-      const outlineMaterial = new THREE.LineBasicMaterial({
-        color: 0x00ffff,
-        linewidth: 2,
-        transparent: true,
-        opacity: 0.8
+
+    // Create or update the shape in the XY plane at z=0 (we'll position and scale it later)
+    const halfWidth = width / 2;
+    const halfHeight = height / 2;
+    const corners = [
+      new THREE.Vector2(-halfWidth, -halfHeight), // Bottom left
+      new THREE.Vector2(halfWidth, -halfHeight),  // Bottom right
+      new THREE.Vector2(halfWidth, halfHeight),   // Top right
+      new THREE.Vector2(-halfWidth, halfHeight),  // Top left
+    ];
+
+    // Reuse the shape if possible
+    let shape: THREE.Shape;
+    if (!faceBoundingBoxShapeRef.current) {
+      shape = new THREE.Shape(corners);
+      faceBoundingBoxShapeRef.current = shape;
+    } else {
+      shape = faceBoundingBoxShapeRef.current;
+      // Update the shape's points (move the shape)
+      shape.getPoints().forEach((pt, i) => {
+        if (corners[i]) {
+          pt.x = corners[i].x;
+          pt.y = corners[i].y;
+        }
       });
-      
-      faceBoundingBoxRef.current = new THREE.LineSegments(outlineGeometry, outlineMaterial);
-      sceneRef.current.add(faceBoundingBoxRef.current);
-      // console.log('Face bounding box outline created and added to scene');
+      // Remove any extra points if the number of corners changes (shouldn't happen here)
     }
+
+    // Always recreate geometry from the updated shape (ShapeGeometry is not mutable)
+    const shapeGeometry = new THREE.ShapeGeometry(shape);
+    const shapeMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    });
+
+    // Compute scale factor based on distance from camera to centerZ
+    let scale = 1;
+    if (cameraRef.current) {
+      const camera = cameraRef.current;
+      // Distance from camera to bounding box center
+      const camToBox = new THREE.Vector3(centerX, centerY, centerZ).distanceTo(camera.position);
+      // Reference distance (e.g., camera at z=2, box at z=0)
+      const referenceDistance = Math.abs(camera.position.z);
+      // Scale so that the shape appears the same size as if it were at z=0
+      scale = camToBox / referenceDistance;
+    }
+
+    if (!faceBoundingBoxRef.current) {
+      faceBoundingBoxRef.current = new THREE.Mesh(shapeGeometry, shapeMaterial);
+      sceneRef.current.add(faceBoundingBoxRef.current);
+    } else {
+      faceBoundingBoxRef.current.geometry.dispose();
+      faceBoundingBoxRef.current.geometry = shapeGeometry;
+      faceBoundingBoxRef.current.material = shapeMaterial;
+    }
+    // Position at the center and z depth, and apply scale
+    faceBoundingBoxRef.current.position.set(centerX, centerY, centerZ);
+    faceBoundingBoxRef.current.scale.set(scale, scale, 1);
     
-    // Update bounding box size and position
-    faceBoundingBoxRef.current.scale.set(width, height, 1);
-    faceBoundingBoxRef.current.position.set(centerX, centerY, 0.1);
     // console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
     
     // Create or update normal vector
@@ -469,10 +489,6 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       faceBoundingBoxRef.current = null;
     }
     
-    if (faceNormalVectorRef.current && sceneRef.current) {
-      sceneRef.current.remove(faceNormalVectorRef.current);
-      faceNormalVectorRef.current = null;
-    }
   }, []);
 
   const setupThreeJS = useCallback(() => {
@@ -648,7 +664,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     console.log('🎯 EFFECT [4/9]: Canvas stream setup [onCanvasStreamChanged]');
     if (!canvasRef.current) return;
     if (canvasStreamRef.current) return;
-    canvasStreamRef.current = canvasRef.current.captureStream(30);
+    canvasStreamRef.current = canvasRef.current.captureStream(60);
     onCanvasStreamChanged(canvasStreamRef.current);
   }, [onCanvasStreamChanged]);
 
