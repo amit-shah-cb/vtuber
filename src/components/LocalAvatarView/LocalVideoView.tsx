@@ -37,17 +37,100 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const size = useResizeObserver({ ref: resizeRef });
   const isMobile = useMobile();
   
-  // Standard video configuration - always capture in 4:3 landscape
-  const VIDEO_WIDTH = 1024;
-  const VIDEO_HEIGHT = 768;
-  const VIDEO_ASPECT = VIDEO_WIDTH / VIDEO_HEIGHT; // 4:3 aspect ratio
-
-  // Get plane dimensions based on device type
-  const getPlaneDimensions = useCallback(() => {
+  // Get video resolution based on device type
+  const getVideoResolution = useCallback(() => {
     if (isMobile) {
-      return { width: 1.5, height: 2 }; // 3:4 aspect ratio (portrait for mobile)
+      return { width: 768, height: 1024 }; // 3:4 aspect ratio (portrait for mobile)
     } else {
-      return { width: 2, height: 1.5 }; // 4:3 aspect ratio (landscape for desktop)
+      return { width: 1024, height: 768 }; // 4:3 aspect ratio (landscape for desktop)
+    }
+  }, [isMobile]);
+
+  // Update plane aspect ratio based on actual video metadata
+  const updatePlaneAspect = useCallback(() => {
+    if (!videoRef.current || !sceneRef.current || !videoTextureRef.current) return;
+    
+    const videoWidth = videoRef.current.videoWidth;
+    const videoHeight = videoRef.current.videoHeight;
+    
+    if (videoWidth === 0 || videoHeight === 0) return; // Video not loaded yet
+    
+    const videoAspect = videoWidth / videoHeight;
+    
+    // Debug: Log quality-related information
+    console.log(`🎥 VIDEO QUALITY DEBUG:`);
+    console.log(`  Resolution: ${videoWidth}x${videoHeight}`);
+    console.log(`  Aspect: ${videoAspect.toFixed(3)}`);
+    console.log(`  Canvas: ${canvasRef.current?.width}x${canvasRef.current?.height}`);
+    console.log(`  Container: ${size.width}x${size.height}`);
+    if (videoTrackRef.current) {
+      console.log(`  Track settings:`, videoTrackRef.current.mediaStreamTrack.getSettings());
+    }
+    
+    // Calculate plane dimensions maintaining aspect ratio
+    // Use a base size of 2 units and scale appropriately
+    let planeWidth, planeHeight;
+    
+    if (videoAspect > 1) {
+      // Landscape video (width > height)
+      planeWidth = 2;
+      planeHeight = 2 / videoAspect;
+    } else {
+      // Portrait video (height > width)
+      planeHeight = 2;
+      planeWidth = 2 * videoAspect;
+    }
+    
+    console.log(`📐 Updating plane: ${planeWidth.toFixed(3)}x${planeHeight.toFixed(3)}`);
+    
+    // Update the plane geometry
+    if (planeRef.current) {
+      sceneRef.current.remove(planeRef.current);
+      planeRef.current.geometry.dispose();
+      
+      // Handle both single material and material array
+      if (Array.isArray(planeRef.current.material)) {
+        planeRef.current.material.forEach(material => material.dispose());
+      } else {
+        planeRef.current.material.dispose();
+      }
+      
+      console.log(`♻️ Recreated plane and material for quality improvement`);
+    }
+    
+    // Create new plane with correct aspect ratio
+    const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+    const material = new THREE.MeshBasicMaterial({
+      map: videoTextureRef.current,
+    });
+    
+    planeRef.current = new THREE.Mesh(geometry, material);
+    sceneRef.current.add(planeRef.current);
+    
+    console.log(`✅ Plane aspect update complete`);
+    
+    return { width: planeWidth, height: planeHeight };
+  }, [size.width, size.height]);
+
+  // Get plane dimensions (fallback for face mesh when video isn't loaded)
+  const getPlaneDimensions = useCallback(() => {
+    if (!videoRef.current || videoRef.current.videoWidth === 0) {
+      // Fallback dimensions
+      if (isMobile) {
+        return { width: 1.5, height: 2 }; // 3:4 aspect ratio (portrait for mobile)
+      } else {
+        return { width: 2, height: 1.5 }; // 4:3 aspect ratio (landscape for desktop)
+      }
+    }
+    
+    // Use actual video dimensions
+    const videoAspect = videoRef.current.videoWidth / videoRef.current.videoHeight;
+    if (videoAspect > 1) {
+      // Landscape
+      return { width: 2, height: 2 / videoAspect };
+    } else {
+      // Portrait
+      return { width: 2 * videoAspect, height: 2 };
     }
   }, [isMobile]);
 
@@ -266,39 +349,13 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     }
   }, [createOrUpdateFaceMesh, removeFaceMesh]);
 
-  const updateVideoPlane = useCallback(() => {
-    if (!sceneRef.current || !videoRef.current || !videoTextureRef.current || !size.width || !size.height) return;
 
-    // Remove existing plane if it exists
-    if (planeRef.current) {
-      sceneRef.current.remove(planeRef.current);
-      planeRef.current.geometry.dispose();
-      
-      // Handle both single material and material array
-      if (Array.isArray(planeRef.current.material)) {
-        planeRef.current.material.forEach(material => material.dispose());
-      } else {
-        planeRef.current.material.dispose();
-      }
-    }
-
-    // Get plane dimensions based on current orientation
-    const planeDimensions = getPlaneDimensions();
-    
-    // Create plane geometry with orientation-based aspect ratio
-    const geometry = new THREE.PlaneGeometry(planeDimensions.width, planeDimensions.height);
-    const material = new THREE.MeshBasicMaterial({
-      map: videoTextureRef.current,
-    });
-    
-    planeRef.current = new THREE.Mesh(geometry, material);
-    sceneRef.current.add(planeRef.current);
-  }, [size.height, size.width, getPlaneDimensions]);
 
   const setupThreeJS = useCallback(() => {
     if (!canvasRef.current) return;
     if (sceneRef.current) return; // Already setup
-    if (!size.width || !size.height) return;
+
+    console.log(`🔧 Initializing Three.js scene...`);
 
     // Create scene
     sceneRef.current = new THREE.Scene();
@@ -313,10 +370,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     // Set pixel ratio for crisp rendering on high-DPI displays
     rendererRef.current.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     
-    // Create camera
+    // Create camera with default aspect ratio (will be updated when container is measured)
     cameraRef.current = new THREE.PerspectiveCamera(
       45,
-      size.width / size.height,
+      16 / 9, // Default aspect ratio
       0.1,
       1000
     );
@@ -337,10 +394,12 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     const light = new THREE.AmbientLight(0xffffff, 1);
     sceneRef.current.add(light);
 
-    // Video texture will be created when video loads in createVideoTrack
-  }, [size.height, size.width, updateVideoPlane, adjustCameraForDevice]);
+    console.log(`✅ Three.js scene initialized`);
 
-  // Create video track with standard resolution
+    // Video texture will be created when video loads in createVideoTrack
+  }, [adjustCameraForDevice]);
+
+  // Create video track with device-appropriate resolution
   const createVideoTrack = useCallback(async () => {
     // Stop existing track if it exists
     if (videoTrackRef.current) {
@@ -348,12 +407,14 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       videoTrackRef.current = null;
     }
 
+    const resolution = getVideoResolution();
+
     try {
       const track = await createLocalVideoTrack({
         facingMode: "user",
         resolution: { 
-          width: VIDEO_WIDTH, 
-          height: VIDEO_HEIGHT, 
+          width: resolution.width, 
+          height: resolution.height, 
           frameRate: 30 
         },
       });
@@ -361,14 +422,17 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       videoTrackRef.current = track;
       track.attach(videoRef.current!);
       
+      // Set up event listeners for plane aspect updates
+      const video = videoRef.current!;
+      
       // Wait for video to be ready before starting
-      videoRef.current!.onloadedmetadata = () => {
-        console.log(`Video loaded: ${videoRef.current!.videoWidth}x${videoRef.current!.videoHeight}`);
+      video.addEventListener('loadedmetadata', () => {
+        console.log(`Video loaded: ${video.videoWidth}x${video.videoHeight}`);
         console.log(`Video track settings:`, videoTrackRef.current?.mediaStreamTrack.getSettings());
         
         // Create video texture now that video is fully loaded
-        if (videoRef.current && sceneRef.current && !videoTextureRef.current) {
-          videoTextureRef.current = new THREE.VideoTexture(videoRef.current);
+        if (video && sceneRef.current && !videoTextureRef.current) {
+          videoTextureRef.current = new THREE.VideoTexture(video);
           videoTextureRef.current.flipY = true;
           videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
           videoTextureRef.current.minFilter = THREE.LinearFilter;
@@ -379,10 +443,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
           videoTextureRef.current.wrapT = THREE.ClampToEdgeWrapping;
           
           console.log('Video texture created with consistent settings');
-          
-          // Create the video plane with proper texture
-          updateVideoPlane();
         }
+        
+        // Update plane aspect ratio based on actual video metadata
+        updatePlaneAspect();
         
         // Start animation loop after video and texture are ready
         animate.current();
@@ -391,19 +455,26 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         setTimeout(() => {
           setupFaceMesh();
         }, 1000);
-      };
+      });
+      
+      // Add event listeners for aspect ratio updates
+      video.addEventListener('loadedmetadata', updatePlaneAspect);
+      window.addEventListener('resize', updatePlaneAspect);
+      window.addEventListener('orientationchange', updatePlaneAspect);
       
       // Monitor for unwanted video track changes
-      videoRef.current!.onresize = () => {
-        console.log(`Video resized: ${videoRef.current!.videoWidth}x${videoRef.current!.videoHeight}`);
+      video.addEventListener('resize', () => {
+        console.log(`Video resized: ${video.videoWidth}x${video.videoHeight}`);
         if (videoTrackRef.current) {
           console.log(`Track settings after resize:`, videoTrackRef.current.mediaStreamTrack.getSettings());
         }
-      };
+        // Update plane aspect when video dimensions change
+        updatePlaneAspect();
+      });
     } catch (error) {
       console.error("Error creating video track:", error);
     }
-  }, [setupFaceMesh, updateVideoPlane]);
+  }, [setupFaceMesh, updatePlaneAspect, getVideoResolution]);
 
   useEffect(() => {  
     createVideoTrack();
@@ -426,15 +497,23 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   useEffect(() => {
     if (!canvasRef.current) return;
     if (!cameraRef.current) return;
-    if (!size.width || !size.height) return;
+    if (!rendererRef.current) return;
+    
+    // Use container dimensions if available, otherwise use canvas client dimensions
+    const width = size.width || canvasRef.current.clientWidth || 800;
+    const height = size.height || canvasRef.current.clientHeight || 600;
+    
+    console.log(`📐 Resizing canvas: ${width}x${height} (container: ${size.width}x${size.height})`);
     
     // Set canvas to fill the entire container
-    canvasRef.current.width = size.width;
-    canvasRef.current.height = size.height;
+    canvasRef.current.width = width;
+    canvasRef.current.height = height;
     
-    rendererRef.current?.setSize(size.width, size.height);
-    cameraRef.current.aspect = size.width / size.height;
+    rendererRef.current.setSize(width, height);
+    cameraRef.current.aspect = width / height;
     cameraRef.current.updateProjectionMatrix();
+    
+    console.log(`✅ Canvas resized to: ${width}x${height}`);
   }, [size, size.height, size.width]);
 
   useEffect(() => {
@@ -444,36 +523,46 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     onCanvasStreamChanged(canvasStreamRef.current);
   }, [onCanvasStreamChanged]);
 
-  useEffect(setupThreeJS, [setupThreeJS]);
-
-  // Update video plane when size changes
+  // Initialize Three.js as soon as canvas is available
   useEffect(() => {
-    if (sceneRef.current && videoTextureRef.current) {
-      updateVideoPlane();
+    if (canvasRef.current && !sceneRef.current) {
+      console.log(`🎬 Canvas ready, initializing Three.js...`);
+      setupThreeJS();
     }
-  }, [updateVideoPlane]);
+  }, [setupThreeJS]);
+
+  useEffect(setupThreeJS, [setupThreeJS]);
 
   // Adjust camera when device type changes
   useEffect(() => {
     adjustCameraForDevice();
   }, [isMobile, adjustCameraForDevice]);
 
-  // Update plane when device type changes
+  // Update plane aspect when device type changes (rare edge case)
   useEffect(() => {
-    if (sceneRef.current && videoTextureRef.current) {
-      updateVideoPlane();
+    if (sceneRef.current && videoTextureRef.current && videoRef.current) {
+      updatePlaneAspect();
     }
-  }, [isMobile, updateVideoPlane]);
+  }, [isMobile, updatePlaneAspect]);
 
-  // Cleanup video track on unmount
+  // Cleanup video track and event listeners on unmount
   useEffect(() => {
     return () => {
       if (videoTrackRef.current) {
         videoTrackRef.current.stop();
         videoTrackRef.current = null;
       }
+      
+      // Cleanup event listeners
+      if (videoRef.current) {
+        const video = videoRef.current;
+        video.removeEventListener('loadedmetadata', updatePlaneAspect);
+        video.removeEventListener('resize', updatePlaneAspect);
+      }
+      window.removeEventListener('resize', updatePlaneAspect);
+      window.removeEventListener('orientationchange', updatePlaneAspect);
     };
-  }, []);
+  }, [updatePlaneAspect]);
 
   return (
     <div className="relative h-full w-full bg-black" ref={resizeRef}>
@@ -485,8 +574,6 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         <video 
           className="h-full w-full" 
           ref={videoRef}
-          width={VIDEO_WIDTH}
-          height={VIDEO_HEIGHT}
           style={{ objectFit: 'cover' }}
         />
       </div>
