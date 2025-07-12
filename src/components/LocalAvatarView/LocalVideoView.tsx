@@ -624,12 +624,12 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   return (
     <div className="relative h-full w-full">
       <div className="overflow-hidden h-full" ref={resizeRef}>
-        <canvas
+      <canvas
           width={size.width}
           height={size.height}
           className="h-full w-full"
-          ref={canvasRef}
-        />
+        ref={canvasRef}
+      />
       </div>
       <div className="absolute w-[0px] h-[0px] bottom-2 right-2 overflow-hidden">
         <video className="h-full w-full" ref={videoRef} />

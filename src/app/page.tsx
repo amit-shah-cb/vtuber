@@ -53,9 +53,9 @@ export default function Page() {
                 <MeetView />
               </div>
             </div>
-            <div className="bg-neutral">
+            {/* <div className="bg-neutral">
               <BottomBar />
-            </div>
+            </div> */}
           </div>
         </div>
       </LiveKitRoom>

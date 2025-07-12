@@ -11,6 +11,7 @@ import { ConnectionState, Track } from "livekit-client";
 import { useCallback, useMemo, useState } from "react";
 import { EgressDestination } from "./EgressDestination";
 import { LocalVideoView } from "./LocalAvatarView/LocalVideoView";
+import FloatingTopBar from "./FloatingTopBar";
 
 export function MeetView() {
   const connectionState = useConnectionState();
@@ -138,15 +139,18 @@ export function MeetView() {
   }
 
   return (
-    <div className="flex h-full w-full">
-      <div className="w-4/5">
-        <LocalVideoView
-          onCanvasStreamChanged={(ms) => {
-            setCavasStream(ms);
-          }}
-        />
-      </div>
-      <div className="flex flex-col w-1/5 h-full">
+    <>
+      <FloatingTopBar />
+      <div className="flex h-full w-full justify-center items-center">
+        <div className="h-[100vh] w-[100vw]">
+          <LocalVideoView
+            onCanvasStreamChanged={(ms) => {
+              setCavasStream(ms);
+            }}
+          />
+        </div>
+
+        {/* <div className="flex flex-col w-full h-full">
         {isDirty ? (
           <div className="bg-red-400">
             Changes have been rename. Re start broadcast for them to take effect
@@ -166,28 +170,31 @@ export function MeetView() {
           enabled={youtubeEnabled}
           streamKey={youtubeStreamKey}
         />
-        <a
-          className="link p-2"
-          target="_blank"
-          rel="noreferrer"
-          href={viewerLink}
-        >
-          Preview Link
-        </a>
         <div className="grow" />
-        <button
-          className={`btn m-2 ${broadcastLoading ? "loading" : ""}`}
-          onClick={async () => {
-            if (isLive) {
-              await stopBroadcast();
-            } else {
-              await broadcast();
-            }
-          }}
-        >
-          {broadcastButtonText}
-        </button>
+      </div> */}
+        <div className="fixed bottom-0 left-0 w-full z-50 bg-black bg-opacity-80 flex items-center justify-between px-4 py-3 shadow-lg">
+          <a
+            className="text-cyan-400 hover:underline text-sm font-medium"
+            target="_blank"
+            rel="noreferrer"
+            href={viewerLink}
+          >
+            Preview Link
+          </a>
+          <button
+            className={`btn ${broadcastLoading ? "loading" : ""} bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-4 py-2 rounded shadow`}
+            onClick={async () => {
+              if (isLive) {
+                await stopBroadcast();
+              } else {
+                await broadcast();
+              }
+            }}
+          >
+            {broadcastButtonText}
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
