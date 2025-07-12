@@ -274,25 +274,25 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
       // Throttle face detection
-      const now = performance.now();
-      if (
-        faceLandmarkerRef.current &&
-        videoRef.current &&
-        videoRef.current.videoWidth > 0 &&
-        now - lastFaceDetectionTimeRef.current > FACE_DETECTION_INTERVAL
-      ) {
-        try {
-          const results = faceLandmarkerRef.current.detectForVideo(videoRef.current, now);
-          if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-            createOrUpdateFaceBoundingBox(results.faceLandmarks);
-          } else {
-            removeFaceBoundingBox();
-          }
-        } catch (detectionError) {
-          // Optionally log or handle error
-        }
-        lastFaceDetectionTimeRef.current = now;
-      }
+      // const now = performance.now();
+      // if (
+      //   faceLandmarkerRef.current &&
+      //   videoRef.current &&
+      //   videoRef.current.videoWidth > 0 &&
+      //   now - lastFaceDetectionTimeRef.current > FACE_DETECTION_INTERVAL
+      // ) {
+      //   try {
+      //     const results = faceLandmarkerRef.current.detectForVideo(videoRef.current, now);
+      //     if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+      //       createOrUpdateFaceBoundingBox(results.faceLandmarks);
+      //     } else {
+      //       removeFaceBoundingBox();
+      //     }
+      //   } catch (detectionError) {
+      //     // Optionally log or handle error
+      //   }
+      //   lastFaceDetectionTimeRef.current = now;
+      // }
       animationFrameId = requestAnimationFrame(animationLoop);
     }
     animationLoop();
@@ -448,10 +448,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         requestAnimationFrame(detectFaceMesh);
       };
       
-      // Wait for video to be fully ready
-      setTimeout(() => {
-        detectFaceMesh();
-      }, 500);
+      // // Wait for video to be fully ready
+      // setTimeout(() => {
+      //   detectFaceMesh();
+      // }, 500);
       
     } catch (error) {
       console.error("Error setting up FaceLandmarker:", error);
