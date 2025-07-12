@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
-import { createLocalVideoTrack } from "livekit-client";
+import { createLocalVideoTrack, LocalVideoTrack } from "livekit-client";
 import useResizeObserver from "use-resize-observer";
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 import { 
@@ -32,7 +32,15 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const faceMeshRef = useRef<THREE.LineSegments | null>(null);
   const faceGeometryRef = useRef<THREE.BufferGeometry | null>(null);
   const faceMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
+  const videoTrackRef = useRef<LocalVideoTrack | null>(null);
   const size = useResizeObserver({ ref: resizeRef });
+  
+  // Standard video configuration - always capture in 4:3 landscape
+  const VIDEO_WIDTH = 1024;
+  const VIDEO_HEIGHT = 768;
+  const VIDEO_ASPECT = VIDEO_WIDTH / VIDEO_HEIGHT; // 4:3 aspect ratio
+  const PLANE_WIDTH = 2;
+  const PLANE_HEIGHT = 1.5; // 4:3 aspect ratio to match video
 
   // Official MediaPipe face mesh indices for specific facial features
   const faceIndices = useRef<number[]>([]);
@@ -105,9 +113,9 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     landmarks.forEach((landmark, index) => {
       // Convert normalized coordinates to world space
       // Since mesh is rotated 180° around Y-axis, flip X coordinate to match movement direction
-      const x = (0.5 - landmark.x) * 2;        // Flip X back to match video movement direction
-      const y = (0.5 - landmark.y) * 1.5;      // Flip Y to match video texture and scale
-      const z = landmark.z * 0.5 || 0;         // Scale Z depth
+      const x = (0.5 - landmark.x) * PLANE_WIDTH;   // Flip X back to match video movement direction
+      const y = (0.5 - landmark.y) * PLANE_HEIGHT;  // Flip Y to match video texture and scale
+      const z = landmark.z * 0.5 || 0;              // Scale Z depth
       
       vertices[index * 3] = x;
       vertices[index * 3 + 1] = y;
@@ -249,13 +257,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       }
     }
 
-    // Since we're maintaining 4:3 aspect ratio in both canvas and video capture,
-    // we can use a simple plane that fills the view
-    const planeWidth = 2;
-    const planeHeight = 1.5; // 4:3 aspect ratio
-    
-    // Create plane geometry to display video with correct aspect ratio
-    const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+    // Create plane geometry with standard 4:3 aspect ratio
+    const geometry = new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT);
     const material = new THREE.MeshBasicMaterial({
       map: videoTextureRef.current,
     });
@@ -311,16 +314,27 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     }
   }, [size.height, size.width, updateVideoPlane]);
 
-  useEffect(() => {  
-    createLocalVideoTrack({
-      facingMode: "user",
-      resolution: { 
-        width: 1024, 
-        height: 768, 
-        frameRate: 30 
-      },
-    }).then((t) => {
-      t.attach(videoRef.current!);
+  // Create video track with standard resolution
+  const createVideoTrack = useCallback(async () => {
+    // Stop existing track if it exists
+    if (videoTrackRef.current) {
+      videoTrackRef.current.stop();
+      videoTrackRef.current = null;
+    }
+
+    try {
+      const track = await createLocalVideoTrack({
+        facingMode: "user",
+        resolution: { 
+          width: VIDEO_WIDTH, 
+          height: VIDEO_HEIGHT, 
+          frameRate: 30 
+        },
+      });
+      
+      videoTrackRef.current = track;
+      track.attach(videoRef.current!);
+      
       // Start animation loop after video is attached
       animate.current();
       
@@ -328,8 +342,14 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       setTimeout(() => {
         setupFaceMesh();
       }, 2000);
-    });
+    } catch (error) {
+      console.error("Error creating video track:", error);
+    }
   }, [setupFaceMesh]);
+
+  useEffect(() => {  
+    createVideoTrack();
+  }, [createVideoTrack]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -337,19 +357,18 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (!size.width || !size.height) return;
     
     // Calculate canvas dimensions that maintain 4:3 aspect ratio while fitting in container
-    const videoAspect = 4 / 3; // 4:3 aspect ratio
     const containerAspect = size.width / size.height;
     
     let canvasWidth, canvasHeight;
     
-    if (containerAspect > videoAspect) {
+    if (containerAspect > VIDEO_ASPECT) {
       // Container is wider than video aspect - fit to height
       canvasHeight = size.height;
-      canvasWidth = canvasHeight * videoAspect;
+      canvasWidth = canvasHeight * VIDEO_ASPECT;
     } else {
       // Container is taller than video aspect - fit to width
       canvasWidth = size.width;
-      canvasHeight = canvasWidth / videoAspect;
+      canvasHeight = canvasWidth / VIDEO_ASPECT;
     }
     
     canvasRef.current.width = canvasWidth;
@@ -374,6 +393,16 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
       updateVideoPlane();
     }
   }, [updateVideoPlane]);
+
+  // Cleanup video track on unmount
+  useEffect(() => {
+    return () => {
+      if (videoTrackRef.current) {
+        videoTrackRef.current.stop();
+        videoTrackRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div className="relative h-full w-full flex items-center justify-center bg-black" ref={resizeRef}>
