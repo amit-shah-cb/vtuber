@@ -12,6 +12,7 @@ import {
   FACEMESH_RIGHT_EYEBROW, 
   FACEMESH_FACE_OVAL 
 } from "@mediapipe/face_mesh";
+import Matter from "matter-js";
 
 type Props = {
   onCanvasStreamChanged: (canvasStream: MediaStream | null) => void;
@@ -97,6 +98,11 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
   const anchorOffsetX = useRef(0.0); // Horizontal anchor displacement
   const anchorOffsetY = useRef(0.02); // Vertical anchor displacement (default slightly below lip)
 
+  // Add refs for Matter.js engine and box
+  const matterEngineRef = useRef<Matter.Engine | null>(null);
+  const matterBoxRef = useRef<Matter.Body | null>(null);
+  const boxMeshRef = useRef<THREE.Mesh | null>(null);
+
   // Initialize face indices with official MediaPipe facial feature data
   useEffect(() => {
     const indices: number[] = [];
@@ -121,12 +127,30 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     console.log(`Face oval: ${FACEMESH_FACE_OVAL.length}, Eyes: ${FACEMESH_LEFT_EYE.length + FACEMESH_RIGHT_EYE.length}, Lips: ${FACEMESH_LIPS.length}, Eyebrows: ${FACEMESH_LEFT_EYEBROW.length + FACEMESH_RIGHT_EYEBROW.length}`);
   }, []);
 
-  const animate = useRef(() => {
+  const animate = useRef((time: number) => {
+    if (!animate.current.lastTime) animate.current.lastTime = time;
+    const delta = time - animate.current.lastTime;
+    animate.current.lastTime = time;
+
     requestAnimationFrame(animate.current);
     // Update video texture if available
     if (videoTextureRef.current) {
       videoTextureRef.current.needsUpdate = true;
     }
+
+    if (matterEngineRef.current) {
+     
+      Matter.Engine.update(matterEngineRef.current, delta/10);
+      // Sync box mesh to Matter.js body
+      if (matterBoxRef.current && boxMeshRef.current) {
+        console.log("Updating Matter.js engine", matterBoxRef.current.position, matterBoxRef.current.angle);
+        const { x, y } = matterBoxRef.current.position;
+        boxMeshRef.current.position.x = x;
+        boxMeshRef.current.position.y = y;
+        boxMeshRef.current.rotation.z = matterBoxRef.current.angle;
+      }
+    }
+      
     // Update orbit controls
     if (controlsRef.current) {
       controlsRef.current.update();
@@ -384,6 +408,42 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
         planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current!);
         sceneRef.current!.add(planeRef.current);
       };
+
+      // Create a simple colored box mesh
+    const geometry = new THREE.BoxGeometry(0.3, 0.3, 0.05);
+    const material = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(0, .2, 0.2); // Start above the video plane
+    boxMeshRef.current = mesh;
+    sceneRef.current.add(mesh);
+
+    const engine = Matter.Engine.create();
+    matterEngineRef.current = engine;
+    engine.world.gravity.y = 0.2; // Set to a lower value for reduced gravity
+
+    // Create a static ground (so the box doesn't fall forever)
+    const ground = Matter.Bodies.rectangle(0, 0, 4, 0.2, { isStatic: true });
+    Matter.World.add(engine.world, [ground]);
+
+    // Create a box at the top
+    const box = Matter.Bodies.rectangle(0, -5.2, 0.3, 0.3);
+    matterBoxRef.current = box;
+    Matter.World.add(engine.world, [box]);
+
+    // Create a Three.js mesh for the ground
+    const groundGeometry = new THREE.BoxGeometry(4, 0.2, 0.05);
+    const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+    const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+    groundMesh.position.set(0, 0, 0.2); // Invert y for Three.js
+    sceneRef.current.add(groundMesh);
+
+    // In your animation loop, sync ground mesh position (if it ever moves)
+    // if (groundMesh && groundBody) {
+    //   groundMesh.position.x = groundBody.position.x;
+    //   groundMesh.position.y = -groundBody.position.y;
+    //   groundMesh.rotation.z = groundBody.angle;
+    // }
+   
     }
   }, [size.height, size.width]);
 
@@ -471,7 +531,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     }).then((t) => {
       t.attach(videoRef.current!);
       // Start animation loop after video is attached
-      animate.current();
+      animate.current(0);
       
       // Setup FaceLandmarker after video is ready
       setTimeout(() => {
@@ -509,13 +569,15 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   useEffect(setupThreeJS, [setupThreeJS]);
 
+
+ 
   const createOrUpdateFaceBoundingBox = useCallback((faceLandmarks: any[]) => {
     if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) {
-      console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
+      // console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
       return;
     }
     
-    console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
+    // console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
     
     const landmarks = faceLandmarks[0];
     
@@ -546,7 +608,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     const centerY = (minY + maxY) / 2;
     const centerZ = (minZ + maxZ) / 2;
     
-    console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
+    // console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
     
     // Create or update bounding box plane
     if (!faceBoundingBoxRef.current) {
@@ -583,7 +645,7 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     if (faceBoundingBoxRef.current) {
       faceBoundingBoxRef.current.scale.set(width, height, 1);
       faceBoundingBoxRef.current.position.set(centerX, centerY, 0.1);
-      console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
+      // console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
     }
     
     // Create or update normal vector
