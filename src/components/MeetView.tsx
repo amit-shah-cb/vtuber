@@ -8,10 +8,11 @@ import {
   useTracks,
 } from "@livekit/components-react";
 import { ConnectionState, Track } from "livekit-client";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import { EgressDestination } from "./EgressDestination";
 import { LocalVideoView } from "./LocalAvatarView/LocalVideoView";
 import FloatingTopBar from "./FloatingTopBar";
+import { useSfxMixer } from "./SfxMixer";
 
 export function MeetView() {
   const connectionState = useConnectionState();
@@ -31,6 +32,8 @@ export function MeetView() {
   const [twitchStreamKey, setTwitchStreamKey] = useState("");
   const [youtubeEnabled, setYouTubeEnabled] = useState(false);
   const [youtubeStreamKey, setYouTubeStreamKey] = useState("");
+
+  const { mixedStream, playSfx, sfxList, loaded: mixerLoaded } = useSfxMixer();
 
   const stopBroadcast = useCallback(async () => {
     setBroadcastLoading(true);
@@ -62,9 +65,17 @@ export function MeetView() {
       await localParticipant.publishTrack(track, {
         source: Track.Source.Camera,
       });
-      const mic = micTrack?.mediaStream?.getTracks()[0];
+      // Unpublish any previous mic tracks before publishing the mixed one
+      const publishedTracks = localParticipant.getTracks();
+      for (const t of publishedTracks) {
+        if (t.source === Track.Source.Microphone) {
+          await localParticipant.unpublishTrack(t.track);
+        }
+      }
+      // Use the mixed audio stream for mic
+      const mic = mixedStream?.getAudioTracks()[0];
       if (mic) {
-        await localParticipant.publishTrack(mic);
+        await localParticipant.publishTrack(mic, { source: Track.Source.Microphone });
       }
       await fetch("/api/broadcast", {
         method: "POST",
@@ -86,7 +97,7 @@ export function MeetView() {
   }, [
     canvasStream,
     localParticipant,
-    micTrack,
+    mixedStream,
     name,
     twitchEnabled,
     twitchStreamKey,
@@ -100,11 +111,11 @@ export function MeetView() {
   }, [name]);
 
   const broadcastButtonText = useMemo(() => {
-    if (broadcastLoading) {
+    if (broadcastLoading || !mixerLoaded) {
       return "";
     }
     return isLive ? "Stop Stream" : "Go Live";
-  }, [broadcastLoading, isLive]);
+  }, [broadcastLoading, isLive, mixerLoaded]);
 
   const setEnabled = useCallback(
     (type: "twitch" | "youtube") => (enabled: boolean) => {
@@ -147,6 +158,8 @@ export function MeetView() {
             onCanvasStreamChanged={(ms) => {
               setCavasStream(ms);
             }}
+            playSfx={playSfx}
+            sfxList={sfxList}
           />
         </div>
 
@@ -182,16 +195,18 @@ export function MeetView() {
             Preview Link
           </a>
           <button
-            className={`btn ${broadcastLoading ? "loading" : ""} bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-4 py-2 rounded shadow`}
+            className={`btn ${broadcastLoading || !mixerLoaded ? "loading" : ""} bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-4 py-2 rounded shadow`}
             onClick={async () => {
+              if (!mixerLoaded) return;
               if (isLive) {
                 await stopBroadcast();
               } else {
                 await broadcast();
               }
             }}
+            disabled={broadcastLoading || !mixerLoaded}
           >
-            {broadcastButtonText}
+            {broadcastButtonText || (mixerLoaded ? (isLive ? "Stop Stream" : "Go Live") : "Loading Audio Mixer...")}
           </button>
         </div>
       </div>

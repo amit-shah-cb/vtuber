@@ -15,6 +15,8 @@ import {
 
 type Props = {
   onCanvasStreamChanged: (canvasStream: MediaStream | null) => void;
+  playSfx?: (name: string) => void;
+  sfxList?: string[];
 };
 
 // Lip Deformation Shader
@@ -66,7 +68,7 @@ const lipDeformationFragmentShader = `
   }
 `;
 
-export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
+export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Props) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
@@ -511,11 +513,11 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
   const createOrUpdateFaceBoundingBox = useCallback((faceLandmarks: any[]) => {
     if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) {
-      console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
+      // console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
       return;
     }
     
-    console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
+    // console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
     
     const landmarks = faceLandmarks[0];
     
@@ -546,11 +548,11 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
     const centerY = (minY + maxY) / 2;
     const centerZ = (minZ + maxZ) / 2;
     
-    console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
+    // console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
     
     // Create or update bounding box plane
     if (!faceBoundingBoxRef.current) {
-      console.log('Creating new face bounding box with ShapeGeometry (fill only)');
+      // console.log('Creating new face bounding box with ShapeGeometry (fill only)');
       
       // Create a rectangle shape
       const shape = new THREE.Shape();
@@ -576,14 +578,14 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
 
       faceBoundingBoxRef.current = group;
       sceneRef.current.add(faceBoundingBoxRef.current);
-      console.log('Face bounding box group (fill only) created and added to scene');
+      // console.log('Face bounding box group (fill only) created and added to scene');
     }
     
     // Update bounding box size and position
     if (faceBoundingBoxRef.current) {
       faceBoundingBoxRef.current.scale.set(width, height, 1);
       faceBoundingBoxRef.current.position.set(centerX, centerY, 0.1);
-      console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
+      // console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
     }
     
     // Create or update normal vector
@@ -715,6 +717,24 @@ export const LocalVideoView = ({ onCanvasStreamChanged }: Props) => {
           />
         </div>
       </div>
+      {/* SFX Debug Overlay */}
+      {playSfx && sfxList && (
+        <div className="fixed top-4 right-4 bg-black bg-opacity-70 text-white p-4 rounded shadow-lg z-50 max-w-xs">
+          <h3 className="text-sm font-bold mb-2">SFX Debug Mixer</h3>
+          <div className="space-y-2">
+            {sfxList.map((sfx) => (
+              <button
+                key={sfx}
+                onClick={() => playSfx(sfx)}
+                className="block w-full bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded text-xs text-left truncate"
+                title={sfx}
+              >
+                {sfx.replace(/\.[^/.]+$/, "")}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
