@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useRef, useState, useCallback } from "react";
 
 // Helper to fetch all sfx files in /public/sfx
@@ -12,14 +14,16 @@ export function useSfxMixer() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const sfxBuffersRef = useRef<Record<string, AudioBuffer>>({});
   const [mixedStream, setMixedStream] = useState<MediaStream | null>(null);
-  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-  const activeSfxNodes = useRef<AudioBufferSourceNode[]>([]);
-  const sfxGainRef = useRef<GainNode | null>(null);
+  const micSourceRef = useRef<any>(null);
+  const destinationRef = useRef<any>(null);
+  const activeSfxNodes = useRef<any[]>([]);
+  const sfxGainRef = useRef<any>(null);
 
-  // Preload SFX and setup audio context
   useEffect(() => {
-    let isMounted = true;
+    // Only run in the browser
+    if (typeof window === 'undefined') return;
+
+    // All browser-only code must be inside this block
     async function setup() {
       const context = new (window.AudioContext || (window as any).webkitAudioContext)();
       audioContextRef.current = context;
@@ -36,7 +40,7 @@ export function useSfxMixer() {
       );
       sfxBuffersRef.current = buffers;
       // Get mic
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const micStream = await window.navigator?.mediaDevices?.getUserMedia({ audio: true });
       const micSource = context.createMediaStreamSource(micStream);
       micSourceRef.current = micSource;
       // Create destination
@@ -54,7 +58,6 @@ export function useSfxMixer() {
     }
     setup();
     return () => {
-      isMounted = false;
       audioContextRef.current?.close();
     };
   }, []);

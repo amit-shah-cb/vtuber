@@ -63,20 +63,14 @@ export function MeetView() {
     try {
       const track = canvasStream!.getTracks()[0];
       await localParticipant.publishTrack(track, {
-        source: Track.Source.Camera,
+        source: Track.Source.Camera
       });
-      // Unpublish any previous mic tracks before publishing the mixed one
-      const publishedTracks = localParticipant.getTracks();
-      for (const t of publishedTracks) {
-        if (t.source === Track.Source.Microphone) {
-          await localParticipant.unpublishTrack(t.track);
-        }
-      }
-      // Use the mixed audio stream for mic
+      // Only publish the mixed audio stream as the mic
       const mic = mixedStream?.getAudioTracks()[0];
       if (mic) {
         await localParticipant.publishTrack(mic, { source: Track.Source.Microphone });
       }
+      
       await fetch("/api/broadcast", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
