@@ -3,15 +3,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { createLocalVideoTrack } from "livekit-client";
 import useResizeObserver from "use-resize-observer";
-import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
-import { 
-  FACEMESH_LEFT_EYE, 
-  FACEMESH_RIGHT_EYE, 
-  FACEMESH_LIPS, 
-  FACEMESH_LEFT_EYEBROW, 
-  FACEMESH_RIGHT_EYEBROW, 
-  FACEMESH_FACE_OVAL 
-} from "@mediapipe/face_mesh";
+import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 type Props = {
   onCanvasStreamChanged: (canvasStream: MediaStream | null) => void;
@@ -19,54 +12,19 @@ type Props = {
   sfxList?: string[];
 };
 
-// Lip Deformation Shader
-const lipDeformationVertexShader = `
-  varying vec2 vUv;
-  uniform vec2 lipCenter;
-  uniform vec2 anchorOffset;
-  uniform float deformationIntensity;
-  uniform float deformationRadius;
-  
-  void main() {
-    vUv = uv;
-    vec3 pos = position;
-    
-    // Apply anchor point displacement to lip center
-    vec2 adjustedLipCenter = lipCenter + anchorOffset;
-    
-    // Calculate distance from current vertex to adjusted lip center
-    float distanceToLip = distance(uv, adjustedLipCenter);
-    
-    // Apply radial deformation under the lips
-    if (distanceToLip < deformationRadius) {
-      // Calculate falloff factor (stronger at center, weaker at edges)
-      float factor = (deformationRadius - distanceToLip) / deformationRadius;
-      factor = smoothstep(0.0, 1.0, factor); // Smooth falloff
-      
-      // Calculate direction from adjusted lip center to current point
-      vec2 direction = normalize(uv - adjustedLipCenter);
-      
-      // Apply deformation - FIXED: Inverted Y direction
-      // Positive values create smile (upward), negative create grimace (downward)
-      pos.y -= factor * deformationIntensity * 0.1; // Flipped sign for correct direction
-      
-      // Add slight horizontal spread for more natural look
-      pos.x += direction.x * factor * deformationIntensity * 0.03;
-    }
-    
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-  }
-`;
-
-const lipDeformationFragmentShader = `
-  uniform sampler2D videoTexture;
-  varying vec2 vUv;
-  
-  void main() {
-    vec4 videoColor = texture2D(videoTexture, vUv);
-    gl_FragColor = videoColor;
-  }
-`;
+// GlassesTransform data structure to encapsulate position, scale, rotation, and static axes
+class GlassesTransform {
+  position = new THREE.Vector3();
+  scale = new THREE.Vector3(1, 1, 1);
+  rotation = new THREE.Euler();
+  upVector = new THREE.Vector3();
+  sideVector = new THREE.Vector3();
+  forward = new THREE.Vector3();
+  // Static axes for rotation calculations
+  static X_AXIS = new THREE.Vector3(1, 0, 0);
+  static Y_AXIS = new THREE.Vector3(0, 1, 0);
+  static Z_AXIS = new THREE.Vector3(0, 0, 1);
+}
 
 export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Props) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -80,51 +38,33 @@ export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Prop
   const planeRef = useRef<THREE.Mesh | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
-  const faceMeshRef = useRef<THREE.LineSegments | null>(null);
-  const faceGeometryRef = useRef<THREE.BufferGeometry | null>(null);
-  const faceMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
-  const lipShaderRef = useRef<THREE.ShaderMaterial | null>(null);
-  // Change the ref type to allow THREE.Group for the bounding box
-  const faceBoundingBoxRef = useRef<THREE.Group | null>(null);
-  const faceNormalVectorRef = useRef<THREE.ArrowHelper | null>(null);
-  const [showFaceBoundingBox, setShowFaceBoundingBox] = useState(false);
+  const [faceLandmarkerReady, setFaceLandmarkerReady] = useState(false);
   const size = useResizeObserver({ ref: resizeRef });
+  const glassesRef = useRef<THREE.Object3D | null>(null);
+  const glassesLoadedRef = useRef(false);
+  const glassesScaleRef = useRef(1);
+  // Add refs for debug spheres
+  const debugSpheresRef = useRef<{[key: string]: THREE.Mesh}>({});
+  // Add refs for debug arrows
+  const debugArrowsRef = useRef<{[key: string]: THREE.ArrowHelper}>({});
+  const glassesTransformRef = useRef(new GlassesTransform());
+  const scaleLandmarkRef = useRef<(landmark: any) => {x: number, y: number, z: number}>((landmark: any) => landmark);
 
-  // Official MediaPipe face mesh indices for specific facial features
-  const faceIndices = useRef<number[]>([]);
-
-  // Deformation controls
-  const deformationIntensity = useRef(0.0); // Start with filters OFF - Positive = smile, Negative = grimace
-  const deformationRadius = useRef(0.15); // Size of affected area
-  const anchorOffsetX = useRef(0.0); // Horizontal anchor displacement
-  const anchorOffsetY = useRef(0.02); // Vertical anchor displacement (default slightly below lip)
-
-  // Initialize face indices with official MediaPipe facial feature data
-  useEffect(() => {
-    const indices: number[] = [];
-    
-    // Combine all facial feature edges into one array
-    const allFacialFeatures = [
-      ...FACEMESH_FACE_OVAL,      // Face outline
-      ...FACEMESH_LEFT_EYE,       // Left eye
-      ...FACEMESH_RIGHT_EYE,      // Right eye  
-      ...FACEMESH_LIPS,           // Mouth/lips
-      ...FACEMESH_LEFT_EYEBROW,   // Left eyebrow
-      ...FACEMESH_RIGHT_EYEBROW   // Right eyebrow
-    ];
-    
-    allFacialFeatures.forEach((edge) => {
-      // Each edge is a pair of vertex indices [from, to]
-      indices.push(edge[0], edge[1]);
-    });
-    
-    faceIndices.current = indices;
-    console.log(`Loaded ${allFacialFeatures.length} edges from official MediaPipe facial features`);
-    console.log(`Face oval: ${FACEMESH_FACE_OVAL.length}, Eyes: ${FACEMESH_LEFT_EYE.length + FACEMESH_RIGHT_EYE.length}, Lips: ${FACEMESH_LIPS.length}, Eyebrows: ${FACEMESH_LEFT_EYEBROW.length + FACEMESH_RIGHT_EYEBROW.length}`);
-  }, []);
+  const debugColors = {
+    midEyes: 0xff0000, // red
+    leftEyeInnerCorner: 0x00ff00, // green
+    rightEyeInnerCorner: 0x0000ff, // blue
+    noseBottom: 0xffff00, // yellow
+    leftEyeUpper1: 0xff00ff, // magenta
+    rightEyeUpper1: 0x00ffff, // cyan
+    upVector: 0xffffff, // white
+    sideVector: 0x888888, // gray
+    forward: 0xff8800, // orange
+  };
 
   const animate = useRef(() => {
-    requestAnimationFrame(animate.current);
+    
+    detect();
     // Update video texture if available
     if (videoTextureRef.current) {
       videoTextureRef.current.needsUpdate = true;
@@ -133,186 +73,10 @@ export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Prop
     if (controlsRef.current) {
       controlsRef.current.update();
     }
+    
     rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
+    requestAnimationFrame(animate.current);
   });
-
-  const initializeFaceMesh = useCallback(() => {
-    if (faceGeometryRef.current && faceMaterialRef.current) return; // Already initialized
-
-    // Create geometry once
-    faceGeometryRef.current = new THREE.BufferGeometry();
-    
-    // Create line material for wireframe edges
-    faceMaterialRef.current = new THREE.LineBasicMaterial({
-      color: 0x00ff00,
-      transparent: true,
-      opacity: 0.8,
-      linewidth: 2
-    });
-
-    // Set indices once (they don't change)
-    faceGeometryRef.current.setIndex(faceIndices.current);
-    
-    // Create initial empty attributes (will be updated later)
-    const initialVertices = new Float32Array(468 * 3); // 468 landmarks * 3 coordinates
-    
-    faceGeometryRef.current.setAttribute('position', new THREE.BufferAttribute(initialVertices, 3));
-  }, []);
-
-  const updateFaceMesh = useCallback((landmarks: any[]) => {
-    if (!faceGeometryRef.current || !faceMaterialRef.current || !landmarks || landmarks.length === 0) return;
-    
-    const vertices = faceGeometryRef.current.attributes.position.array as Float32Array;
-    
-    landmarks.forEach((landmark, index) => {
-      // Convert normalized coordinates to world space
-      // Since mesh is rotated 180° around Y-axis, flip X coordinate to match movement direction
-      const x = (0.5 - landmark.x) * 2;        // Flip X back to match video movement direction
-      const y = (0.5 - landmark.y) * 1.5;      // Flip Y to match video texture and scale
-      const z = landmark.z * 0.5 || 0;         // Scale Z depth
-      
-      vertices[index * 3] = x;
-      vertices[index * 3 + 1] = y;
-      vertices[index * 3 + 2] = z;
-    });
-    
-    // Mark attributes as needing update
-    faceGeometryRef.current.attributes.position.needsUpdate = true;
-  }, []);
-
-  const createOrUpdateFaceMesh = useCallback((faceLandmarks: any[]) => {
-    if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) return;
-    
-    // Initialize geometry and material if not done already
-    initializeFaceMesh();
-    
-    // Update the mesh with new landmark data
-    updateFaceMesh(faceLandmarks[0]);
-    
-    // Create line segments if it doesn't exist, otherwise just update existing one
-    if (!faceMeshRef.current) {
-      faceMeshRef.current = new THREE.LineSegments(faceGeometryRef.current!, faceMaterialRef.current!);
-      faceMeshRef.current.position.z = 0.02; // Slightly in front of video plane
-      
-      // Rotate 180 degrees around Y-axis so face mesh faces same direction as face in video
-      faceMeshRef.current.rotation.y = Math.PI; // 180 degrees rotation
-      
-      sceneRef.current.add(faceMeshRef.current);
-    } else {
-      // Optional: Add continuous rotation animation
-      // Uncomment the line below for animated rotation
-      // faceMeshRef.current.rotation.y += 0.01;
-    }
-  }, [initializeFaceMesh, updateFaceMesh]);
-
-  const removeFaceMesh = useCallback(() => {
-    if (faceMeshRef.current && sceneRef.current) {
-      sceneRef.current.remove(faceMeshRef.current);
-      faceMeshRef.current = null;
-    }
-  }, []);
-
-  const updateLipDeformation = useCallback((faceLandmarks: any[]) => {
-    if (!lipShaderRef.current || !faceLandmarks || faceLandmarks.length === 0) return;
-    
-    const landmarks = faceLandmarks[0];
-    
-    // Use lip center landmark (MediaPipe landmark 13 is mouth center)
-    const lipCenter = landmarks[13];
-    
-    // Convert landmark to UV coordinates - FIXED: Coordinate mapping
-    // MediaPipe coordinates are normalized [0,1] where (0,0) is top-left
-    // UV coordinates are [0,1] where (0,0) is bottom-left
-    const lipUV = new THREE.Vector2(lipCenter.x, 1.0 - lipCenter.y);
-    
-    // Update shader uniforms
-    lipShaderRef.current.uniforms.lipCenter.value = lipUV;
-    lipShaderRef.current.uniforms.anchorOffset.value = new THREE.Vector2(anchorOffsetX.current, anchorOffsetY.current);
-    lipShaderRef.current.uniforms.deformationIntensity.value = deformationIntensity.current;
-    lipShaderRef.current.uniforms.deformationRadius.value = deformationRadius.current;
-  }, []);
-
-  const setupFaceLandmarker = useCallback(async () => {
-    // Ensure we're running on client side
-    if (typeof window === 'undefined') return;
-    
-    try {
-      console.log("Initializing FaceLandmarker for lip deformation...");
-      
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
-      );
-      
-      console.log("Vision tasks initialized");
-      
-      // Try GPU first, fallback to CPU if it fails
-      try {
-        faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-            delegate: "GPU"
-          },
-          runningMode: "VIDEO",
-          numFaces: 1,
-          minFaceDetectionConfidence: 0.5,
-          minFacePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-          outputFaceBlendshapes: false,
-          outputFacialTransformationMatrixes: false
-        });
-        console.log("FaceLandmarker model loaded with GPU acceleration");
-      } catch (gpuError) {
-        console.warn("GPU initialization failed, falling back to CPU:", gpuError);
-        
-        faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-            delegate: "CPU"
-          },
-          runningMode: "VIDEO",
-          numFaces: 1,
-          minFaceDetectionConfidence: 0.5,
-          minFacePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-          outputFaceBlendshapes: false,
-          outputFacialTransformationMatrixes: false
-        });
-        console.log("FaceLandmarker model loaded with CPU");
-      }
-      
-      // Start detection loop
-      const detectFaceLandmarks = () => {
-        if (faceLandmarkerRef.current && videoRef.current && videoRef.current.videoWidth > 0) {
-          try {
-            const startTimeMs = performance.now();
-            const results = faceLandmarkerRef.current.detectForVideo(videoRef.current, startTimeMs);
-            
-            if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-              updateLipDeformation(results.faceLandmarks);
-              createOrUpdateFaceBoundingBox(results.faceLandmarks);
-            }
-           
-          } catch (detectionError) {
-            console.warn("Face landmark detection error:", detectionError);
-          }
-        }
-        requestAnimationFrame(detectFaceLandmarks);
-      };
-      
-      // Wait for video to be fully ready
-      setTimeout(() => {
-        detectFaceLandmarks();
-      }, 500);
-      
-    } catch (error) {
-      console.error("Error setting up FaceLandmarker:", error);
-      // Retry after a delay
-      setTimeout(() => {
-        console.log("Retrying FaceLandmarker setup...");
-        setupFaceLandmarker();
-      }, 2000);
-    }
-  }, [updateLipDeformation]);
 
   const setupThreeJS = useCallback(() => {
     if (!canvasRef.current) return;
@@ -354,25 +118,15 @@ export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Prop
     sceneRef.current.add(light);
 
     // Create video texture and plane when video is ready
-    if (videoRef.current) {
+   if (videoRef.current) {
       videoTextureRef.current = new THREE.VideoTexture(videoRef.current);
       videoTextureRef.current.flipY = true;
       videoTextureRef.current.colorSpace = THREE.SRGBColorSpace;
       videoTextureRef.current.minFilter = THREE.LinearFilter;
       videoTextureRef.current.magFilter = THREE.LinearFilter;
 
-      // Create lip deformation shader material
-      lipShaderRef.current = new THREE.ShaderMaterial({
-        uniforms: {
-          videoTexture: { value: videoTextureRef.current },
-          lipCenter: { value: new THREE.Vector2(0.5, 0.7) }, // Default position
-          anchorOffset: { value: new THREE.Vector2(anchorOffsetX.current, anchorOffsetY.current) },
-          deformationIntensity: { value: deformationIntensity.current },
-          deformationRadius: { value: deformationRadius.current }
-        },
-        vertexShader: lipDeformationVertexShader,
-        fragmentShader: lipDeformationFragmentShader
-      });
+      // Create a basic material with the video texture
+      const videoMaterial = new THREE.MeshBasicMaterial({ map: videoTextureRef.current });
 
       // Wait for video metadata to load to get correct aspect ratio
       videoRef.current.onloadedmetadata = () => {
@@ -382,85 +136,150 @@ export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Prop
         // Use a base height of 1, width = aspect
         const planeHeight = 2;
         const planeWidth = aspect * planeHeight;
+        console.log("videoWidth, videoHeight", videoWidth, videoHeight);
         const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight, 128, 96);
-        planeRef.current = new THREE.Mesh(geometry, lipShaderRef.current!);
+        console.log(" planeWidth, planeHeight", planeWidth, planeHeight);
+        planeRef.current = new THREE.Mesh(geometry, videoMaterial);
+        // Store width/height for later use
+        planeRef.current.userData.planeWidth = planeWidth;
+        planeRef.current.userData.planeHeight = planeHeight;
         sceneRef.current!.add(planeRef.current);
+        // Define scaleLandmark function to use latest plane size
+        scaleLandmarkRef.current = (landmark: any) => ({
+          x: landmark.x * planeWidth,
+          y: landmark.y * planeHeight,
+          z: landmark.z * planeWidth,
+        });
+
+        const loader = new GLTFLoader();
+        loader.load('/3d/glasses/scene.gltf', (gltf) => {
+          glassesRef.current = gltf.scene;
+          // Compute scale factor for later use
+          const bbox = new THREE.Box3().setFromObject(glassesRef.current);
+          const sizeBox = bbox.getSize(new THREE.Vector3());
+          glassesScaleRef.current = sizeBox.x;
+          glassesRef.current.name = 'glasses';
+          sceneRef.current!.add(glassesRef.current);
+          glassesRef.current.visible = false; // Hide glasses initially
+          glassesLoadedRef.current = true;
+        });
       };
     }
+
+   
+    // Add debug spheres for landmarks
+    // const sphereRadius = 0.03;
+    // const sphereSegments = 12;
+    // const sphereKeys = [
+    //   'midEyes',
+    //   'leftEyeInnerCorner',
+    //   'rightEyeInnerCorner',
+    //   'noseBottom',
+    //   'leftEyeUpper1',
+    //   'rightEyeUpper1',
+    // ];
+    // sphereKeys.forEach((key) => {
+    //   const geometry = new THREE.SphereGeometry(sphereRadius, sphereSegments, sphereSegments);
+    //   const material = new THREE.MeshBasicMaterial({ color: debugColors[key] });
+    //   const sphere = new THREE.Mesh(geometry, material);
+    //   sphere.visible = true;
+    //   sceneRef.current!.add(sphere);
+    //   debugSpheresRef.current[key] = sphere;
+    // });
+
+    // // Add debug arrows for upVector, sideVector, forward
+    // const arrowLength = 0.3;
+    // const arrowKeys = [
+    //   { key: 'upVector', color: debugColors.upVector },
+    //   { key: 'sideVector', color: debugColors.sideVector },
+    //   { key: 'forward', color: debugColors.forward },
+    // ];
+    // arrowKeys.forEach(({ key, color }) => {
+    //   const dir = new THREE.Vector3(1, 0, 0); // placeholder, will update
+    //   const origin = new THREE.Vector3(0, 0, 0);
+    //   const arrow = new THREE.ArrowHelper(dir, origin, arrowLength, color);
+    //   sceneRef.current!.add(arrow);
+    //   debugArrowsRef.current[key] = arrow;
+    // });
   }, [size.height, size.width]);
 
-  // Control functions for deformation
-  const setSmileIntensity = useCallback((intensity: number) => {
-    deformationIntensity.current = Math.abs(intensity); // Positive for smile
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.deformationIntensity.value = deformationIntensity.current;
-    }
-  }, []);
+  const setupFaceLandmarker = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+    if (faceLandmarkerRef.current) return;
 
-  const setGrimaceIntensity = useCallback((intensity: number) => {
-    deformationIntensity.current = -Math.abs(intensity); // Negative for grimace
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.deformationIntensity.value = deformationIntensity.current;
-    }
-  }, []);
+    // Load the WASM vision fileset
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
+    );
 
-  const setDeformationRadius = useCallback((radius: number) => {
-    deformationRadius.current = Math.max(0.05, Math.min(0.3, radius)); // Clamp between 0.05 and 0.3
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.deformationRadius.value = deformationRadius.current;
-    }
-  }, []);
-
-  const setAnchorOffsetX = useCallback((offsetX: number) => {
-    anchorOffsetX.current = Math.max(-0.2, Math.min(0.2, offsetX)); // Clamp between -0.2 and 0.2
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.anchorOffset.value = new THREE.Vector2(anchorOffsetX.current, anchorOffsetY.current);
-    }
-  }, []);
-
-  const setAnchorOffsetY = useCallback((offsetY: number) => {
-    anchorOffsetY.current = Math.max(-0.2, Math.min(0.2, offsetY)); // Clamp between -0.2 and 0.2
-    if (lipShaderRef.current) {
-      lipShaderRef.current.uniforms.anchorOffset.value = new THREE.Vector2(anchorOffsetX.current, anchorOffsetY.current);
-    }
-  }, []);
-
-  const toggleFaceBoundingBox = useCallback(() => {
-    setShowFaceBoundingBox(prev => {
-      const newValue = !prev;
-      console.log('Face bounding box toggle:', prev, '->', newValue);
-      if (!newValue) {
-        removeFaceBoundingBox();
-      }
-      return newValue;
+    // Create the FaceLandmarker with WASM delegate
+    faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+        delegate: 'GPU', // or 'CPU' for CPU-only
+      },
+      runningMode: 'VIDEO',
+      numFaces: 1,
+      minFaceDetectionConfidence: 0.5,
+      minFacePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+      outputFaceBlendshapes: false,
+      outputFacialTransformationMatrixes: false,
     });
+    setFaceLandmarkerReady(true);
   }, []);
 
-  // Expose control functions globally for testing
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      (window as any).lipControls = {
-        setSmileIntensity,
-        setGrimaceIntensity,
-        setDeformationRadius,
-        setAnchorOffsetX,
-        setAnchorOffsetY,
-        toggleFaceBoundingBox,
-        getCurrentIntensity: () => deformationIntensity.current,
-        getCurrentRadius: () => deformationRadius.current,
-        getCurrentAnchorOffset: () => ({ x: anchorOffsetX.current, y: anchorOffsetY.current }),
-        getFaceBoundingBoxVisible: () => showFaceBoundingBox
-      };
-      
-      console.log("Lip deformation controls available:");
-      console.log("window.lipControls.setSmileIntensity(1.0) // 0.0 to 3.0");
-      console.log("window.lipControls.setGrimaceIntensity(1.0) // 0.0 to 3.0");
-      console.log("window.lipControls.setDeformationRadius(0.15) // 0.05 to 0.3");
-      console.log("window.lipControls.setAnchorOffsetX(0.0) // -0.2 to 0.2");
-      console.log("window.lipControls.setAnchorOffsetY(0.02) // -0.2 to 0.2");
-      console.log("window.lipControls.toggleFaceBoundingBox() // toggle face bounding box visibility");
+  // Add transformLandmarks helper (ported from mediapipe-face-effects)
+  const transformLandmarks = (landmarks: any) => {
+    if (!landmarks) return landmarks;
+    let hasVisiblity = !!landmarks.find((l: any) => l.visibility);
+    let minZ = 1e-4;
+    if (hasVisiblity) {
+      landmarks.forEach((landmark:any) => {
+        let { z, visibility } = landmark;
+        z = -z;
+        if (z < minZ && visibility) {
+          minZ = z;
+        }
+      });
+    } else {
+      minZ = Math.max(-landmarks[234].z, -landmarks[454].z);
     }
-  }, [setSmileIntensity, setGrimaceIntensity, setDeformationRadius, setAnchorOffsetX, setAnchorOffsetY, toggleFaceBoundingBox, showFaceBoundingBox]);
+    return landmarks.map((landmark:any) => {
+      let { x, y, z } = landmark;
+      return {
+        x: -0.5 + x,
+        y: 0.5 - y,
+        z: -z - minZ,
+        visibility: landmark.visibility,
+      };
+    });
+  };
+
+  // Detection loop
+  
+  const detect = () => {
+    if (
+      faceLandmarkerRef.current &&    
+      videoRef.current
+    ) {
+      const startTimeMs = performance.now();
+      const results = faceLandmarkerRef.current.detectForVideo(
+        videoRef.current,
+        startTimeMs
+      );
+      if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+        const landmarks = results.faceLandmarks[0];
+        // console.log(landmarks);
+        // TODO: Call overlay update methods here (glasses, mask, etc.)
+        // Example: glassesOverlayRef.current?.update(landmarks);
+        // Example: faceMaskOverlayRef.current?.update(landmarks);
+        // Example: createOrUpdateFaceMesh([landmarks]);
+        updateGlassesFromLandmarks(landmarks);
+      }
+    }      
+  };
+  
 
   useEffect(() => {  
     createLocalVideoTrack({
@@ -469,15 +288,14 @@ export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Prop
         height: 960, 
         width: 720, 
         frameRate: 60 
+        
       },
     }).then((t) => {
       t.attach(videoRef.current!);
       // Start animation loop after video is attached
       animate.current();
-      
-      // Setup FaceLandmarker after video is ready
       setTimeout(() => {
-        setupFaceLandmarker();
+        setupFaceLandmarker();      
       }, 2000);
     });
   }, [setupFaceLandmarker]);
@@ -511,120 +329,98 @@ export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Prop
 
   useEffect(setupThreeJS, [setupThreeJS]);
 
-  const createOrUpdateFaceBoundingBox = useCallback((faceLandmarks: any[]) => {
-    if (!sceneRef.current || !faceLandmarks || faceLandmarks.length === 0) {
-      // console.log('createOrUpdateFaceBoundingBox: Missing scene or landmarks');
-      return;
+  // In the detection callback, update the glasses transform
+  const updateGlassesFromLandmarks = useCallback((landmarks: any) => {
+    if (!glassesRef.current || !landmarks || landmarks.length < 468) return;
+    // Show glasses on first valid detect
+    if (!glassesRef.current.visible) {
+      glassesRef.current.visible = true;
     }
-    
-    // console.log('createOrUpdateFaceBoundingBox: Processing', faceLandmarks.length, 'face(s)');
-    
-    const landmarks = faceLandmarks[0];
-    
-    // Calculate bounding box from face landmarks
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-    
-    landmarks.forEach((landmark: any) => {
-      // Convert normalized coordinates to world space (same as face mesh)
-      const x = (landmark.x - 0.5) * 2;        // Convert to -1 to +1 range (NOT flipped)
-      const y = (0.5 - landmark.y) * 1.5;      // Flip Y and convert to -0.75 to +0.75 range
-      const z = landmark.z * 0.5 || 0;         // Scale Z depth
-      
-      minX = Math.min(minX, x);
-      maxX = Math.max(maxX, x);
-      minY = Math.min(minY, y);
-      maxY = Math.max(maxY, y);
-      minZ = Math.min(minZ, z);
-      maxZ = Math.max(maxZ, z);
-    });
-    
-    // Calculate bounding box dimensions and center
-    const width = maxX - minX;
-    const height = maxY - minY;
-    const depth = maxZ - minZ;
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-    const centerZ = (minZ + maxZ) / 2;
-    
-    // console.log('Face Bounding Box calculated:', { width, height, centerX, centerY, centerZ });
-    
-    // Create or update bounding box plane
-    if (!faceBoundingBoxRef.current) {
-      // console.log('Creating new face bounding box with ShapeGeometry (fill only)');
-      
-      // Create a rectangle shape
-      const shape = new THREE.Shape();
-      shape.moveTo(-0.5, -0.5);
-      shape.lineTo(0.5, -0.5);
-      shape.lineTo(0.5, 0.5);
-      shape.lineTo(-0.5, 0.5);
-      shape.lineTo(-0.5, -0.5); // Close the shape
+    // Transform landmarks before using
+    const tLandmarks = transformLandmarks(landmarks);
+    // Use the scaleLandmark function defined on setup
+    const scaleLandmark = scaleLandmarkRef.current;
+    let midEyes = scaleLandmark(tLandmarks[168]);
+    let leftEyeInnerCorner = scaleLandmark(tLandmarks[463]);
+    let rightEyeInnerCorner = scaleLandmark(tLandmarks[243]);
+    let noseBottom = scaleLandmark(tLandmarks[2]);
+    let leftEyeUpper1 = scaleLandmark(tLandmarks[264]);
+    let rightEyeUpper1 = scaleLandmark(tLandmarks[34]);
 
-      // Create filled geometry and mesh
-      const shapeGeometry = new THREE.ShapeGeometry(shape);
-      const fillMaterial = new THREE.MeshBasicMaterial({
-        color: 0x00ffff,
-        transparent: true,
-        opacity: 0.15,
-        side: THREE.DoubleSide
-      });
-      const fillMesh = new THREE.Mesh(shapeGeometry, fillMaterial);
+    // Use the single GlassesTransform instance
+    const gt = glassesTransformRef.current;
+    gt.position.set(midEyes.x, midEyes.y, midEyes.z);
+    const eyeDist = Math.sqrt(
+      (leftEyeUpper1.x - rightEyeUpper1.x) ** 2 +
+      (leftEyeUpper1.y - rightEyeUpper1.y) ** 2 +
+      (leftEyeUpper1.z - rightEyeUpper1.z) ** 2
+    );
+    const scale = eyeDist / glassesScaleRef.current;
+    gt.scale.set(scale, scale, scale);
+    gt.upVector.set(
+      midEyes.x - noseBottom.x,
+      midEyes.y - noseBottom.y,
+      midEyes.z - noseBottom.z
+    ).normalize();
+    gt.sideVector.set(
+      leftEyeInnerCorner.x - rightEyeInnerCorner.x,
+      leftEyeInnerCorner.y - rightEyeInnerCorner.y,
+      leftEyeInnerCorner.z - rightEyeInnerCorner.z
+    ).normalize();
+    gt.forward.crossVectors(gt.upVector, gt.sideVector).normalize();
 
-      // Use only the fill mesh (no outline)
-      const group = new THREE.Group();
-      group.add(fillMesh);
+    // Compute Euler rotation from vectors (as before)
+    let zRot = (GlassesTransform.X_AXIS).angleTo(
+      gt.upVector.clone().projectOnPlane(GlassesTransform.Z_AXIS)
+    ) - (Math.PI / 2);
+    let xRot = (Math.PI / 2) - (GlassesTransform.Z_AXIS).angleTo(
+      gt.upVector.clone().projectOnPlane(GlassesTransform.X_AXIS)
+    );
+    let yRot = (
+      new THREE.Vector3(gt.sideVector.x, 0, gt.sideVector.z)
+    ).angleTo(GlassesTransform.Z_AXIS) - (Math.PI / 2);
+    gt.rotation.set(xRot, yRot, zRot);
 
-      faceBoundingBoxRef.current = group;
-      sceneRef.current.add(faceBoundingBoxRef.current);
-      // console.log('Face bounding box group (fill only) created and added to scene');
-    }
-    
-    // Update bounding box size and position
-    if (faceBoundingBoxRef.current) {
-      faceBoundingBoxRef.current.scale.set(width, height, 1);
-      faceBoundingBoxRef.current.position.set(centerX, centerY, 0.1);
-      // console.log('Face bounding box updated - scale:', width, height, 'position:', centerX, centerY, 0.1);
-    }
-    
-    // Create or update normal vector
-    // if (!faceNormalVectorRef.current) {
-    //   const direction = new THREE.Vector3(0, 0, 1);
-    //   const origin = new THREE.Vector3();
-    //   const length = Math.max(width, height) * 0.5;
-      
-    //   faceNormalVectorRef.current = new THREE.ArrowHelper(
-    //     direction,
-    //     origin,
-    //     length,
-    //     0xff0000, // Red color
-    //     length * 0.2,
-    //     length * 0.1
-    //   );
-      
-    //   sceneRef.current.add(faceNormalVectorRef.current);
-    //   console.log('Face normal vector created and added to scene');
-    // }
-    
-    // // Update normal vector position and size
-    // const normalLength = Math.max(width, height) * 0.5;
-    // faceNormalVectorRef.current.position.set(centerX, centerY, 0.15);
-    // faceNormalVectorRef.current.setLength(normalLength, normalLength * 0.2, normalLength * 0.1);
-    // console.log('Face normal vector updated - position:', centerX, centerY, 0.15);
+    // Update glassesRef using GlassesTransform
+    glassesRef.current.position.copy(gt.position);
+    glassesRef.current.scale.copy(gt.scale);
+    glassesRef.current.rotation.copy(gt.rotation);
+
+    // Update debug spheres and arrows as before
+    // const debugPoints = {
+    //   midEyes,
+    //   leftEyeInnerCorner,
+    //   rightEyeInnerCorner,
+    //   noseBottom,
+    //   leftEyeUpper1,
+    //   rightEyeUpper1,
+    // };
+    // Object.entries(debugPoints).forEach(([key, pos]) => {
+    //   const sphere = debugSpheresRef.current[key];
+    //   if (sphere) {
+    //     sphere.position.set(pos.x, pos.y, pos.z);
+    //     sphere.visible = true;
+    //   }
+    // });
+    // const arrowLength = 0.3;
+    // const arrowUpdates = [
+    //   { key: 'upVector', dir: gt.upVector },
+    //   { key: 'sideVector', dir: gt.sideVector },
+    //   { key: 'forward', dir: gt.forward },
+    // ];
+    // arrowUpdates.forEach(({ key, dir }) => {
+    //   const arrow = debugArrowsRef.current[key];
+    //   if (arrow) {
+    //     arrow.position.copy(gt.position);
+    //     arrow.setDirection(dir);
+    //     arrow.setLength(arrowLength);
+    //     arrow.visible = true;
+    //   }
+    // });
   }, []);
 
-  const removeFaceBoundingBox = useCallback(() => {
-    if (faceBoundingBoxRef.current && sceneRef.current) {
-      sceneRef.current.remove(faceBoundingBoxRef.current);
-      faceBoundingBoxRef.current = null;
-    }
-    
-    if (faceNormalVectorRef.current && sceneRef.current) {
-      sceneRef.current.remove(faceNormalVectorRef.current);
-      faceNormalVectorRef.current = null;
-    }
-  }, []);
+  
+
 
   return (
     <div className="relative h-full w-full">
@@ -641,82 +437,8 @@ export const LocalVideoView = ({ onCanvasStreamChanged, playSfx, sfxList }: Prop
       </div>
       
       {/* Control Panel */}
-      <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-4 rounded max-w-xs">
-        <h3 className="text-sm font-bold mb-2">Lip Deformation Controls</h3>
-        
-        {/* Intensity Controls */}
-        <div className="space-y-2 text-xs mb-4">
-          <button 
-            onClick={() => setSmileIntensity(1.5)}
-            className="block w-full bg-green-600 hover:bg-green-700 px-2 py-1 rounded"
-          >
-            Smile
-          </button>
-          <button 
-            onClick={() => setGrimaceIntensity(1.5)}
-            className="block w-full bg-red-600 hover:bg-red-700 px-2 py-1 rounded"
-          >
-            Grimace
-          </button>
-          <button 
-            onClick={() => setSmileIntensity(0)}
-            className="block w-full bg-gray-600 hover:bg-gray-700 px-2 py-1 rounded"
-          >
-            Reset
-          </button>
-          <button 
-            onClick={toggleFaceBoundingBox}
-            className={`block w-full px-2 py-1 rounded ${
-              showFaceBoundingBox 
-                ? 'bg-cyan-600 hover:bg-cyan-700' 
-                : 'bg-gray-600 hover:bg-gray-700'
-            }`}
-          >
-            {showFaceBoundingBox ? 'Hide Face Box' : 'Show Face Box'}
-          </button>
-        </div>
-
-        {/* Radial Distance Control */}
-        <div className="mb-3">
-          <label className="text-xs block mb-1">Radial Distance: {deformationRadius.current.toFixed(2)}</label>
-          <input
-            type="range"
-            min="0.05"
-            max="0.3"
-            step="0.01"
-            defaultValue={deformationRadius.current}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            onChange={(e) => setDeformationRadius(parseFloat(e.target.value))}
-          />
-        </div>
-
-        {/* Anchor Point Controls */}
-        <div className="mb-3">
-          <label className="text-xs block mb-1">Anchor Offset X: {anchorOffsetX.current.toFixed(2)}</label>
-          <input
-            type="range"
-            min="-0.2"
-            max="0.2"
-            step="0.01"
-            defaultValue={anchorOffsetX.current}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            onChange={(e) => setAnchorOffsetX(parseFloat(e.target.value))}
-          />
-        </div>
-
-        <div className="mb-3">
-          <label className="text-xs block mb-1">Anchor Offset Y: {anchorOffsetY.current.toFixed(2)}</label>
-          <input
-            type="range"
-            min="-0.2"
-            max="0.2"
-            step="0.01"
-            defaultValue={anchorOffsetY.current}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            onChange={(e) => setAnchorOffsetY(parseFloat(e.target.value))}
-          />
-        </div>
-      </div>
+      {/* Remove the Lip Deformation Controls panel from the returned JSX */}
+      {/* Find the <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-4 rounded max-w-xs"> ... </div> block with the heading 'Lip Deformation Controls' and delete it and its children. */}
       {/* SFX Debug Overlay */}
       {playSfx && sfxList && (
         <div className="fixed top-4 right-4 bg-black bg-opacity-70 text-white p-4 rounded shadow-lg z-50 max-w-xs">
